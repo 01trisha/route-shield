@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleIdentifier</key>
+    <string>local.vpnguard</string>
+    <key>CFBundleName</key>
+    <string>Route Shield</string>
+    <key>CFBundleDisplayName</key>
+    <string>Route Shield</string>
+    <key>CFBundleIconFile</key>
+    <string>RouteShield.icns</string>
+    <key>CFBundleExecutable</key>
+    <string>VPNGuard</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleInfoDictionaryVersion</key>
+    <string>6.0</string>
+    <key>CFBundleDevelopmentRegion</key>
+    <string>ru</string>
+    <key>CFBundleLocalizations</key>
+    <array>
+        <string>ru</string>
+        <string>en</string>
+    </array>
+    <key>CFBundleShortVersionString</key>
+    <string>1.3.0</string>
+    <key>CFBundleVersion</key>
+    <string>4</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+    <key>LSUIElement</key>
+    <true/>
+</dict>
+</plist>
