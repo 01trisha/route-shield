@@ -27,6 +27,7 @@ static NSString *const LastUpdateCheckKey = @"LastUpdateCheck";
 static NSString *const LatestReleaseTagKey = @"LatestReleaseTag";
 static NSString *const UpdateNotificationTagKey = @"UpdateReleaseTag";
 static const NSTimeInterval UpdateCheckInterval = 24 * 60 * 60;
+static NSString *const TrackedAppTileIdentifier = @"TrackedAppTile";
 
 typedef NS_ENUM(NSInteger, NotificationDetails) {
     NotificationDetailsAddress,
@@ -201,25 +202,31 @@ static BOOL PrepareConfigForEditing(NSURL *config, NSError **error) {
         [updated writeToURL:config atomically:YES encoding:NSUTF8StringEncoding error:error];
 }
 
-static NSUInteger AddApps(NSURL *config, NSArray<NSString *> *droppedIDs, NSString **problem) {
+static NSUInteger EditApps(NSURL *config, NSArray<NSString *> *identifiers, BOOL adding, NSString **problem) {
     NSError *error = nil;
     __attribute__((objc_precise_lifetime)) NSFileHandle *lock = LockConfigDirectory(config, &error);
     if (!lock) {
         *problem = error.localizedDescription;
         return 0;
     }
-    NSURL *source = [NSFileManager.defaultManager fileExistsAtPath:config.path] ? config : ConfigTemplateURL();
+    BOOL exists = [NSFileManager.defaultManager fileExistsAtPath:config.path];
+    if (!exists && !adding) return 0;
+    NSURL *source = exists ? config : ConfigTemplateURL();
     NSString *contents = ReadConfig(source, problem);
     NSRange range = NSMakeRange(NSNotFound, 0);
     NSArray<NSString *> *existing = contents ? ParseApps(contents, &range, problem) : nil;
     if (!existing) return 0;
 
-    NSMutableOrderedSet<NSString *> *merged = [NSMutableOrderedSet orderedSetWithArray:existing];
-    [merged addObjectsFromArray:droppedIDs];
-    NSUInteger added = merged.count - existing.count;
-    if (added == 0) return 0;
+    NSMutableOrderedSet<NSString *> *edited = [NSMutableOrderedSet orderedSetWithArray:existing];
+    if (adding) {
+        [edited addObjectsFromArray:identifiers];
+    } else {
+        [edited removeObjectsInArray:identifiers];
+    }
+    NSUInteger changed = adding ? edited.count - existing.count : existing.count - edited.count;
+    if (!changed) return 0;
 
-    NSString *value = [merged.array componentsJoinedByString:@","];
+    NSString *value = [edited.array componentsJoinedByString:@","];
     NSString *updated;
     if (range.location == NSNotFound) {
         NSString *newline = contents.length > 0 &&
@@ -239,7 +246,7 @@ static NSUInteger AddApps(NSURL *config, NSArray<NSString *> *droppedIDs, NSStri
         *problem = error.localizedDescription;
         return 0;
     }
-    return added;
+    return changed;
 }
 
 static NSString *BundleIDAtURL(NSURL *url) {
@@ -774,8 +781,60 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
 }
 @end
 
+@interface TrackedAppTile : NSCollectionViewItem
+@property (strong) NSButton *removeButton;
+@end
+
+@implementation TrackedAppTile
+
+- (void)loadView {
+    NSView *view = [[NSView alloc] initWithFrame:NSZeroRect];
+    self.view = view;
+
+    NSImageView *icon = [[NSImageView alloc] initWithFrame:NSZeroRect];
+    icon.imageScaling = NSImageScaleProportionallyUpOrDown;
+    icon.translatesAutoresizingMaskIntoConstraints = NO;
+    self.imageView = icon;
+    [view addSubview:icon];
+
+    NSTextField *name = [NSTextField wrappingLabelWithString:@""];
+    name.alignment = NSTextAlignmentCenter;
+    name.preferredMaxLayoutWidth = 104;
+    name.maximumNumberOfLines = 2;
+    name.lineBreakMode = NSLineBreakByWordWrapping;
+    ((NSTextFieldCell *)name.cell).truncatesLastVisibleLine = YES;
+    name.translatesAutoresizingMaskIntoConstraints = NO;
+    self.textField = name;
+    [view addSubview:name];
+
+    NSImage *cross = [NSImage imageWithSystemSymbolName:@"xmark.circle.fill" accessibilityDescription:nil];
+    [cross setTemplate:YES];
+    self.removeButton = [NSButton buttonWithImage:cross target:nil action:nullptr];
+    self.removeButton.bordered = NO;
+    self.removeButton.contentTintColor = NSColor.systemRedColor;
+    self.removeButton.translatesAutoresizingMaskIntoConstraints = NO;
+    [view addSubview:self.removeButton];
+
+    [NSLayoutConstraint activateConstraints:@[
+        [icon.topAnchor constraintEqualToAnchor:view.topAnchor constant:9],
+        [icon.centerXAnchor constraintEqualToAnchor:view.centerXAnchor],
+        [icon.widthAnchor constraintEqualToConstant:48],
+        [icon.heightAnchor constraintEqualToConstant:48],
+        [name.topAnchor constraintEqualToAnchor:icon.bottomAnchor constant:6],
+        [name.leadingAnchor constraintEqualToAnchor:view.leadingAnchor constant:3],
+        [name.trailingAnchor constraintEqualToAnchor:view.trailingAnchor constant:-3],
+        [name.bottomAnchor constraintLessThanOrEqualToAnchor:view.bottomAnchor],
+        [self.removeButton.centerXAnchor constraintEqualToAnchor:icon.trailingAnchor],
+        [self.removeButton.topAnchor constraintEqualToAnchor:view.topAnchor],
+        [self.removeButton.widthAnchor constraintEqualToConstant:26],
+        [self.removeButton.heightAnchor constraintEqualToConstant:26]
+    ]];
+}
+
+@end
+
 @interface GuardApp : NSObject <NSApplicationDelegate, NSMenuDelegate, NSWindowDelegate, NSDraggingDestination,
-    UNUserNotificationCenterDelegate>
+    NSCollectionViewDataSource, UNUserNotificationCenterDelegate>
 @property (copy) NSString *shortcutTarget;
 @property (strong) NSStatusItem *statusItem;
 @property (strong) NSPanel *addPanel;
@@ -784,6 +843,10 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
 @property (strong) NSWindow *welcomeWindow;
 @property (strong) NSBox *dropBox;
 @property (strong) NSTextField *dropStatus;
+@property (strong) NSCollectionView *trackedAppsGrid;
+@property (strong) NSTextField *trackedAppsEmptyLabel;
+@property (copy) NSArray<NSString *> *trackedAppIDs;
+@property (strong) NSMutableDictionary<NSString *, NSURL *> *droppedAppURLs;
 @property (strong) NSWindow *prompt;
 @property (strong) NSTextField *ipv4;
 @property (strong) NSTextField *ipv6;
@@ -1194,6 +1257,8 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     self.addPanel = nil;
     self.dropBox = nil;
     self.dropStatus = nil;
+    self.trackedAppsGrid = nil;
+    self.trackedAppsEmptyLabel = nil;
     if (self.welcomeWindow) [self showWelcome];
     [self refreshSettings];
     [self updateAvailableReleaseIndicator];
@@ -1206,9 +1271,11 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
 
 - (void)showAddPanel {
     if (!self.addPanel) {
-        self.addPanel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 460, 210)
-            styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskUtilityWindow
+        self.addPanel = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 550, 405)
+            styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskUtilityWindow |
+                      NSWindowStyleMaskResizable
             backing:NSBackingStoreBuffered defer:NO];
+        self.addPanel.contentMinSize = NSMakeSize(365, 280);
         self.addPanel.title = L(@"Добавить приложения");
         self.addPanel.floatingPanel = YES;
         self.addPanel.hidesOnDeactivate = NO;
@@ -1235,10 +1302,42 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
         NSView *boxContent = self.dropBox.contentView;
         [boxContent addSubview:labels];
 
-        self.dropStatus = [NSTextField wrappingLabelWithString:L(@"Список обновится автоматически.")];
+        NSTextField *appsTitle = [NSTextField labelWithString:L(@"Добавленные приложения")];
+        appsTitle.font = [NSFont boldSystemFontOfSize:NSFont.systemFontSize];
+        appsTitle.translatesAutoresizingMaskIntoConstraints = NO;
+
+        NSScrollView *scroll = [[NSScrollView alloc] init];
+        scroll.drawsBackground = NO;
+        scroll.hasVerticalScroller = YES;
+        scroll.autohidesScrollers = YES;
+        scroll.translatesAutoresizingMaskIntoConstraints = NO;
+        NSCollectionViewFlowLayout *layout = [[NSCollectionViewFlowLayout alloc] init];
+        layout.itemSize = NSMakeSize(110, 98);
+        layout.minimumInteritemSpacing = 8;
+        layout.minimumLineSpacing = 8;
+        layout.sectionInset = NSEdgeInsetsMake(4, 0, 4, 0);
+        self.trackedAppsGrid = [[NSCollectionView alloc] initWithFrame:NSMakeRect(0, 0, 510, 0)];
+        self.trackedAppsGrid.collectionViewLayout = layout;
+        self.trackedAppsGrid.autoresizingMask = NSViewWidthSizable;
+        self.trackedAppsGrid.backgroundColors = @[NSColor.clearColor];
+        self.trackedAppsGrid.dataSource = self;
+        [self.trackedAppsGrid registerClass:TrackedAppTile.class forItemWithIdentifier:TrackedAppTileIdentifier];
+        [self.trackedAppsGrid setAccessibilityLabel:appsTitle.stringValue];
+        scroll.documentView = self.trackedAppsGrid;
+
+        self.trackedAppsEmptyLabel = [NSTextField labelWithString:L(@"Список приложений пуст")];
+        self.trackedAppsEmptyLabel.textColor = NSColor.secondaryLabelColor;
+        self.trackedAppsEmptyLabel.translatesAutoresizingMaskIntoConstraints = NO;
+        self.dropStatus = [NSTextField wrappingLabelWithString:@""];
+        self.dropStatus.maximumNumberOfLines = 2;
+        self.dropStatus.lineBreakMode = NSLineBreakByTruncatingTail;
+        self.dropStatus.textColor = NSColor.secondaryLabelColor;
         self.dropStatus.translatesAutoresizingMaskIntoConstraints = NO;
         NSView *view = self.addPanel.contentView;
         [view addSubview:self.dropBox];
+        [view addSubview:appsTitle];
+        [view addSubview:scroll];
+        [view addSubview:self.trackedAppsEmptyLabel];
         [view addSubview:self.dropStatus];
         [NSLayoutConstraint activateConstraints:@[
             [labels.centerXAnchor constraintEqualToAnchor:boxContent.centerXAnchor],
@@ -1246,16 +1345,72 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
             [self.dropBox.topAnchor constraintEqualToAnchor:view.topAnchor constant:20],
             [self.dropBox.leadingAnchor constraintEqualToAnchor:view.leadingAnchor constant:20],
             [self.dropBox.trailingAnchor constraintEqualToAnchor:view.trailingAnchor constant:-20],
-            [self.dropBox.heightAnchor constraintGreaterThanOrEqualToConstant:100],
-            [self.dropStatus.topAnchor constraintEqualToAnchor:self.dropBox.bottomAnchor constant:14],
+            [self.dropBox.heightAnchor constraintEqualToConstant:76],
+            [appsTitle.topAnchor constraintEqualToAnchor:self.dropBox.bottomAnchor constant:14],
+            [appsTitle.leadingAnchor constraintEqualToAnchor:self.dropBox.leadingAnchor],
+            [scroll.topAnchor constraintEqualToAnchor:appsTitle.bottomAnchor constant:6],
+            [scroll.leadingAnchor constraintEqualToAnchor:self.dropBox.leadingAnchor],
+            [scroll.trailingAnchor constraintEqualToAnchor:self.dropBox.trailingAnchor],
+            [self.trackedAppsEmptyLabel.centerXAnchor constraintEqualToAnchor:scroll.centerXAnchor],
+            [self.trackedAppsEmptyLabel.centerYAnchor constraintEqualToAnchor:scroll.centerYAnchor],
+            [self.dropStatus.topAnchor constraintEqualToAnchor:scroll.bottomAnchor constant:8],
             [self.dropStatus.leadingAnchor constraintEqualToAnchor:self.dropBox.leadingAnchor],
             [self.dropStatus.trailingAnchor constraintEqualToAnchor:self.dropBox.trailingAnchor],
-            [self.dropStatus.bottomAnchor constraintEqualToAnchor:view.bottomAnchor constant:-20]
+            [self.dropStatus.bottomAnchor constraintEqualToAnchor:view.bottomAnchor constant:-16],
+            [self.dropStatus.heightAnchor constraintGreaterThanOrEqualToConstant:16]
         ]];
         [self.addPanel center];
     }
+    [self refreshTrackedAppsWithStatus:@""];
     [NSApp activateIgnoringOtherApps:YES];
     [self.addPanel makeKeyAndOrderFront:nil];
+}
+
+- (void)refreshTrackedAppsWithStatus:(NSString *)status {
+    NSString *problem = nil;
+    self.trackedAppIDs = ReadApps(&problem) ?: @[];
+    [self.trackedAppsGrid reloadData];
+    self.trackedAppsEmptyLabel.hidden = problem != nil || self.trackedAppIDs.count > 0;
+    self.dropStatus.stringValue = problem ?: status;
+}
+
+- (NSInteger)collectionView:(NSCollectionView *)collectionView numberOfItemsInSection:(NSInteger)section {
+    (void)collectionView;
+    (void)section;
+    return self.trackedAppIDs.count;
+}
+
+- (NSCollectionViewItem *)collectionView:(NSCollectionView *)collectionView itemForRepresentedObjectAtIndexPath:(NSIndexPath *)indexPath {
+    NSString *identifier = self.trackedAppIDs[indexPath.item];
+    NSURL *url = FindApp(identifier);
+    NSURL *droppedURL = self.droppedAppURLs[identifier];
+    if (!url && IsAppWithID(droppedURL, identifier)) url = droppedURL;
+    NSString *name = url ? AppName(url) : [identifier stringByAppendingString:L(@" (не найдено)")];
+    TrackedAppTile *tile = (TrackedAppTile *)[collectionView makeItemWithIdentifier:TrackedAppTileIdentifier
+        forIndexPath:indexPath];
+    tile.imageView.image = url ? [NSWorkspace.sharedWorkspace iconForFile:url.path] :
+        [NSImage imageWithSystemSymbolName:@"app" accessibilityDescription:nil];
+    tile.textField.stringValue = name;
+    tile.textField.toolTip = name;
+    tile.removeButton.identifier = identifier;
+    tile.removeButton.target = self;
+    tile.removeButton.action = @selector(removeTrackedApp:);
+    NSString *removeLabel = [NSString stringWithFormat:L(@"Убрать «%@» из списка"), name];
+    tile.removeButton.toolTip = removeLabel;
+    [tile.removeButton setAccessibilityLabel:removeLabel];
+    return tile;
+}
+
+- (void)removeTrackedApp:(NSButton *)sender {
+    NSString *identifier = sender.identifier;
+    NSString *problem = nil;
+    NSUInteger removed = EditApps(ConfigURL(), @[identifier], NO, &problem);
+    if (problem) {
+        self.dropStatus.stringValue = [NSString stringWithFormat:L(@"Не удалось убрать приложение. %@"), problem];
+        return;
+    }
+    [self.droppedAppURLs removeObjectForKey:identifier];
+    [self refreshTrackedAppsWithStatus:removed ? L(@"Приложение убрано из списка.") : @""];
 }
 
 - (NSDragOperation)draggingEntered:(id<NSDraggingInfo>)sender {
@@ -1282,11 +1437,13 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     NSArray<NSURL *> *urls = [sender.draggingPasteboard readObjectsForClasses:@[[NSURL class]]
         options:@{NSPasteboardURLReadingFileURLsOnlyKey: @YES}];
     NSMutableOrderedSet<NSString *> *identifiers = [NSMutableOrderedSet orderedSet];
+    NSMutableDictionary<NSString *, NSURL *> *urlsByID = [NSMutableDictionary dictionary];
     NSUInteger skipped = 0;
     for (NSURL *url in urls) {
         NSString *identifier = BundleIDAtURL(url);
         if (IsTargetID(identifier)) {
             [identifiers addObject:identifier];
+            urlsByID[identifier] = url;
         } else {
             skipped++;
         }
@@ -1297,14 +1454,23 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     }
 
     NSString *problem = nil;
-    NSUInteger added = AddApps(ConfigURL(), identifiers.array, &problem);
+    NSUInteger added = EditApps(ConfigURL(), identifiers.array, YES, &problem);
     if (problem) {
         self.dropStatus.stringValue = [NSString stringWithFormat:L(@"Не удалось добавить приложения. %@"), problem];
         return NO;
     }
-    self.dropStatus.stringValue = [NSString stringWithFormat:
+    if (!self.droppedAppURLs) self.droppedAppURLs = [NSMutableDictionary dictionary];
+    [self.droppedAppURLs addEntriesFromDictionary:urlsByID];
+    NSString *status = [NSString stringWithFormat:
         L(@"Добавлено: %lu. Уже в списке: %lu. Пропущено: %lu."),
         (unsigned long)added, (unsigned long)(identifiers.count - added), (unsigned long)skipped];
+    [self refreshTrackedAppsWithStatus:status];
+    if (added && self.trackedAppIDs.count) {
+        [self.addPanel.contentView layoutSubtreeIfNeeded];
+        NSIndexPath *last = [NSIndexPath indexPathForItem:self.trackedAppIDs.count - 1 inSection:0];
+        [self.trackedAppsGrid scrollToItemsAtIndexPaths:[NSSet setWithObject:last]
+            scrollPosition:NSCollectionViewScrollPositionBottom];
+    }
     return YES;
 }
 

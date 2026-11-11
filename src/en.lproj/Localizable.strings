@@ -58,12 +58,15 @@
 "О нас" = "About Us";
 "Репозиторий на GitHub" = "GitHub repository";
 "Добавить приложения" = "Add Apps";
+"Добавленные приложения" = "Added Apps";
 "Перетащите приложения сюда" = "Drop apps here";
 "Можно выбрать несколько значков в Finder." = "You can select multiple apps in Finder.";
-"Список обновится автоматически." = "The list updates automatically.";
 "Перетащите приложения (.app) из Finder." = "Drop application bundles (.app) from Finder.";
 "Не удалось добавить приложения. %@" = "Could not add apps. %@";
 "Добавлено: %lu. Уже в списке: %lu. Пропущено: %lu." = "Added: %lu. Already listed: %lu. Skipped: %lu.";
+"Убрать «%@» из списка" = "Remove “%@” from the list";
+"Не удалось убрать приложение. %@" = "Could not remove the app. %@";
+"Приложение убрано из списка." = "App removed from the list.";
 "Уведомления недоступны" = "Notifications unavailable";
 "Разрешите уведомления для Route Shield в системных настройках и включите этот пункт снова." = "Allow Route Shield notifications in System Settings, then turn this option on again.";
 "Принудительно закрывать приложения при смене IP?" = "Force-quit apps when the IP changes?";

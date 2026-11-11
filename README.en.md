@@ -45,7 +45,7 @@ If your account cannot write to `/Applications`, run `./install.sh --user` to in
 
 Choose your language in the welcome window and select **Continue**. Route Shield suggests Russian if Russian is your preferred macOS language and English for all other languages.
 
-1. Click the Route Shield icon in the menu bar and choose **Add Apps…**. Open **Applications** in Finder and drag an app such as Calculator into the drop area.
+1. Click the Route Shield icon in the menu bar and choose **Add Apps…**. Drag one or more apps from Finder into the drop area at the top of the window. Added apps appear in the grid. Click the red cross on an icon to remove the app from the list.
 2. Open the Route Shield menu again and select Calculator. Wait for the IPv4 and IPv6 checks, then choose **Open** or **Cancel**.
 3. To launch apps from the Dock, choose **Create or Update Dock Shortcuts**. Drag the shortcuts from `~/Applications/Route Shield` into the Dock in place of the original icons.
 4. Click the Route Shield icon and choose **Settings…**. In **General**, choose which connection details appear in the menu and the prelaunch window, change the language, or enable launch at login or force-quit. In **Notifications**, enable notifications, choose what they include, and send a test banner with your current connection details. The **About Us** tab links to the GitHub repository.
