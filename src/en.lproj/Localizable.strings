@@ -9,13 +9,14 @@
 "IPv4   Проверяю…" = "IPv4   Checking…";
 "IPv6   Проверяю…" = "IPv6   Checking…";
 "Страна по IP: %@" = "IP country: %@";
+"Страна соединения:" = "Connection country:";
 "Определяю…" = "Looking up…";
 "не определена" = "unavailable";
 "Мониторинг включён · смена IP ещё не обнаружена" = "Monitoring on · No IP change detected yet";
 "Список приложений пуст" = "No apps in the list";
 " (не найдено)" = " (not found)";
 "Добавить приложения…" = "Add Apps…";
-"Открыть .env" = "Open .env";
+"Открыть конфигурационный файл…" = "Open Configuration File…";
 "Создать или обновить ярлыки для Dock" = "Create or Update Dock Shortcuts";
 "Настройки…" = "Settings…";
 "Выйти из " = "Quit ";
@@ -36,6 +37,7 @@
 "Страна" = "Country";
 "IP-адрес и страна" = "IP address and country";
 "Проверить уведомление" = "Test Notification";
+"Проверяю соединение…" = "Checking connection…";
 "Принудительно закрывать приложения при смене IP" = "Force-quit apps when the IP changes";
 "Несохранённые данные могут потеряться." = "Unsaved changes may be lost.";
 "Запускать при входе" = "Open at login";
@@ -59,11 +61,12 @@
 " · ошибка в .env" = " · .env error";
 " · запросов на закрытие %lu из %lu" = " · force-quit requests %lu of %lu";
 "Внешний IP изменился" = "Public IP changed";
+"Внешний IP недоступен." = "Public IP unavailable.";
 "Приложения закрыты после смены IP" = "Apps closed after IP change";
 " · проверка" = " · Test";
 "Не удалось отправить уведомление" = "Could not send the notification";
 "Не удалось изменить автозапуск" = "Could not change login settings";
-"Не удалось создать .env" = "Could not create .env";
+"Не удалось открыть конфигурационный файл" = "Could not open the configuration file";
 "Не удалось запустить Route Shield" = "Could not start Route Shield";
 "Запуск отменён" = "Launch cancelled";
 "Приложение не установлено или его Bundle ID отсутствует в .env." = "The app is unavailable or its bundle ID is missing from .env.";
