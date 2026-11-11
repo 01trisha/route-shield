@@ -23,6 +23,10 @@ static NSString *const ShowIPv4Key = @"ShowIPv4";
 static NSString *const ShowIPv6Key = @"ShowIPv6";
 static NSString *const ShowCountryKey = @"ShowCountry";
 static NSString *const NotificationDetailsKey = @"NotificationDetails";
+static NSString *const LastUpdateCheckKey = @"LastUpdateCheck";
+static NSString *const LatestReleaseTagKey = @"LatestReleaseTag";
+static NSString *const UpdateNotificationTagKey = @"UpdateReleaseTag";
+static const NSTimeInterval UpdateCheckInterval = 24 * 60 * 60;
 
 typedef NS_ENUM(NSInteger, NotificationDetails) {
     NotificationDetailsAddress,
@@ -377,6 +381,64 @@ static void ShowMessage(NSString *title, NSString *detail) {
     [alert addButtonWithTitle:@"OK"];
     [NSApp activateIgnoringOtherApps:YES];
     [alert runModal];
+}
+
+static NSString *ReleaseVersion(id tag) {
+    if (![tag isKindOfClass:NSString.class]) return nil;
+    NSString *value = tag;
+    if ([value rangeOfString:@"\\Av?[0-9]+\\.[0-9]+\\.[0-9]+\\z"
+                    options:NSRegularExpressionSearch].location == NSNotFound) return nil;
+    return [value hasPrefix:@"v"] ? [value substringFromIndex:1] : value;
+}
+
+static NSString *CurrentAppVersion() {
+    return [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
+}
+
+static NSString *AvailableUpdateTag() {
+    NSString *tag = [NSUserDefaults.standardUserDefaults stringForKey:LatestReleaseTagKey];
+    NSString *latest = ReleaseVersion(tag);
+    NSString *current = ReleaseVersion(CurrentAppVersion());
+    return latest && current && [latest compare:current options:NSNumericSearch] == NSOrderedDescending ? tag : nil;
+}
+
+static NSString *ReleaseTagFromResponse(NSData *data) {
+    if (!data) return nil;
+    id response = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    if (![response isKindOfClass:NSDictionary.class]) return nil;
+    NSDictionary *release = response;
+    if ([release[@"draft"] isEqual:@YES] || [release[@"prerelease"] isEqual:@YES]) return nil;
+    id tag = release[@"tag_name"];
+    return ReleaseVersion(tag) ? tag : nil;
+}
+
+static NSURL *ReleaseURL(NSString *tag) {
+    if (!ReleaseVersion(tag)) return nil;
+    NSString *address = [NSString stringWithFormat:@"%@/releases/tag/%@", RepositoryURL, tag];
+    return [NSURL URLWithString:address];
+}
+
+static void CheckLatestRelease(void (^complete)(NSString *)) {
+    static NSURLSession *session;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        NSURLSessionConfiguration *config = NSURLSessionConfiguration.ephemeralSessionConfiguration;
+        config.timeoutIntervalForRequest = 10;
+        config.timeoutIntervalForResource = 20;
+        session = [NSURLSession sessionWithConfiguration:config];
+    });
+    NSString *repositoryPath = [NSURL URLWithString:RepositoryURL].path;
+    NSURL *endpoint = [NSURL URLWithString:
+        [NSString stringWithFormat:@"https://api.github.com/repos%@/releases/latest", repositoryPath]];
+    NSMutableURLRequest *request = [NSMutableURLRequest requestWithURL:endpoint];
+    request.cachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
+    [request setValue:@"application/vnd.github+json" forHTTPHeaderField:@"Accept"];
+    [request setValue:@"Route-Shield" forHTTPHeaderField:@"User-Agent"];
+    [[session dataTaskWithRequest:request completionHandler:^(NSData *data, NSURLResponse *response, NSError *error) {
+        NSHTTPURLResponse *http = [response isKindOfClass:NSHTTPURLResponse.class] ? (NSHTTPURLResponse *)response : nil;
+        NSString *tag = !error && http.statusCode == 200 ? ReleaseTagFromResponse(data) : nil;
+        dispatch_async(dispatch_get_main_queue(), ^{ complete(tag); });
+    }] resume];
 }
 
 static NSFileHandle *AcquireMainInstanceLock(int *failure) {
@@ -734,6 +796,9 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
 @property BOOL opening;
 @property BOOL requestingNotifications;
 @property BOOL testingNotification;
+@property BOOL checkingForUpdate;
+@property BOOL updateResultRequested;
+@property (strong) NSTimer *updateCheckTimer;
 @property (strong) IPMonitor *ipMonitor;
 @property (copy) NSString *lastIPEvent;
 @property (strong) NSMutableSet<NSNumber *> *closingPIDs;
@@ -772,11 +837,12 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
 - (void)startMenuBar {
     self.statusItem = [NSStatusBar.systemStatusBar statusItemWithLength:NSVariableStatusItemLength];
     self.statusItem.button.image = [NSImage imageWithSystemSymbolName:@"shield" accessibilityDescription:GuardName];
-    self.statusItem.button.toolTip = GuardName;
     self.statusItem.menu = [[NSMenu alloc] initWithTitle:GuardName];
     self.statusItem.menu.delegate = self;
     self.statusItem.menu.autoenablesItems = NO;
     [self updateIPMonitoring];
+    [self updateAvailableReleaseIndicator];
+    [self scheduleUpdateCheck];
 }
 
 - (NSMenuItem *)addItem:(NSString *)title action:(SEL)action toMenu:(NSMenu *)menu {
@@ -845,6 +911,11 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     [self addItem:L(@"Создать или обновить ярлыки для Dock")
         action:identifiers.count ? @selector(createLaunchers) : nullptr toMenu:menu];
     [menu addItem:NSMenuItem.separatorItem];
+    NSString *update = AvailableUpdateTag();
+    if (update) {
+        NSString *title = [NSString stringWithFormat:L(@"Доступна версия %@…"), ReleaseVersion(update)];
+        [self addItem:title action:@selector(openAvailableUpdate) toMenu:menu];
+    }
     [self addItem:L(@"Настройки…") action:@selector(showSettings) toMenu:menu];
     [self addItem:[L(@"Выйти из ") stringByAppendingString:GuardName] action:@selector(quit) toMenu:menu];
 }
@@ -896,7 +967,7 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
 
 - (void)showSettings {
     if (!self.settingsWindow) {
-        self.settingsWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 530, 390)
+        self.settingsWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 530, 435)
             styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable backing:NSBackingStoreBuffered defer:NO];
         self.settingsWindow.releasedWhenClosed = NO;
         [self.settingsWindow center];
@@ -914,6 +985,14 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
 }
 
 - (NSArray<NSView *> *)generalControls {
+    BOOL waitingForUpdate = self.checkingForUpdate && self.updateResultRequested;
+    NSButton *checkUpdates = [NSButton buttonWithTitle:waitingForUpdate ? L(@"Проверяю обновления…") : L(@"Проверить обновления…")
+        target:self action:@selector(checkForUpdates)];
+    checkUpdates.enabled = !waitingForUpdate;
+    NSTextField *version = [NSTextField labelWithString:[NSString stringWithFormat:L(@"Версия %@"), CurrentAppVersion()]];
+    version.textColor = NSColor.secondaryLabelColor;
+    NSStackView *updates = [NSStackView stackViewWithViews:@[checkUpdates, version]];
+    updates.spacing = 12;
     NSTextField *connection = [NSTextField labelWithString:L(@"Информация о соединении")];
     connection.font = [NSFont boldSystemFontOfSize:NSFont.systemFontSize];
     NSButton *forceClose = [NSButton checkboxWithTitle:L(@"Принудительно закрывать приложения при смене IP")
@@ -927,7 +1006,7 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
         target:self action:@selector(toggleLogin)];
     login.state = status == SMAppServiceStatusEnabled ? NSControlStateValueOn : NSControlStateValueOff;
     NSMutableArray<NSView *> *controls = [@[
-        [self languageRow], connection,
+        updates, [self languageRow], connection,
         [self connectionCheckbox:L(@"Показывать IPv4") key:ShowIPv4Key],
         [self connectionCheckbox:L(@"Показывать IPv6") key:ShowIPv6Key],
         [self connectionCheckbox:L(@"Показывать страну") key:ShowCountryKey],
@@ -936,7 +1015,7 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     if (status == SMAppServiceStatusRequiresApproval) {
         login.enabled = NO;
         [controls insertObject:[NSButton buttonWithTitle:L(@"Разрешить запуск при входе…")
-            target:self action:@selector(toggleLogin)] atIndex:6];
+            target:self action:@selector(toggleLogin)] atIndex:7];
     }
     [controls addObject:[NSButton buttonWithTitle:L(@"Открыть конфигурационный файл…")
         target:self action:@selector(editConfig)]];
@@ -989,6 +1068,116 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:RepositoryURL]];
 }
 
+- (void)openAvailableUpdate {
+    NSURL *url = ReleaseURL(AvailableUpdateTag());
+    if (url) [NSWorkspace.sharedWorkspace openURL:url];
+}
+
+- (void)updateAvailableReleaseIndicator {
+    BOOL available = AvailableUpdateTag() != nil;
+    NSStatusBarButton *button = self.statusItem.button;
+    button.imagePosition = available ? NSImageLeft : NSImageOnly;
+    button.title = available ? @" •" : @"";
+    NSString *label = available ? L(@"Доступно обновление Route Shield") : GuardName;
+    button.toolTip = label;
+    [button setAccessibilityLabel:label];
+}
+
+- (void)scheduleUpdateCheck {
+    [self.updateCheckTimer invalidate];
+    self.updateCheckTimer = nil;
+    id lastCheck = [NSUserDefaults.standardUserDefaults objectForKey:LastUpdateCheckKey];
+    NSTimeInterval elapsed = [lastCheck isKindOfClass:NSDate.class] ? -[lastCheck timeIntervalSinceNow] : UpdateCheckInterval;
+    NSTimeInterval delay = UpdateCheckInterval - MAX(0, elapsed);
+    if (delay <= 0) {
+        [self runUpdateCheck:NO];
+        return;
+    }
+
+    __weak GuardApp *weakSelf = self;
+    self.updateCheckTimer = [NSTimer timerWithTimeInterval:delay repeats:NO block:^(NSTimer *timer) {
+        (void)timer;
+        [weakSelf runUpdateCheck:NO];
+    }];
+    self.updateCheckTimer.tolerance = 60;
+    [NSRunLoop.mainRunLoop addTimer:self.updateCheckTimer forMode:NSRunLoopCommonModes];
+}
+
+- (void)checkForUpdates {
+    [self runUpdateCheck:YES];
+}
+
+- (void)runUpdateCheck:(BOOL)manual {
+    if (manual) self.updateResultRequested = YES;
+    if (self.checkingForUpdate) {
+        if (manual) [self refreshSettings];
+        return;
+    }
+
+    self.checkingForUpdate = YES;
+    if (manual) [self refreshSettings];
+    [NSUserDefaults.standardUserDefaults setObject:NSDate.date forKey:LastUpdateCheckKey];
+    [self scheduleUpdateCheck];
+    __weak GuardApp *weakSelf = self;
+    CheckLatestRelease(^(NSString *tag) { [weakSelf finishUpdateCheck:tag]; });
+}
+
+- (void)finishUpdateCheck:(NSString *)tag {
+    NSString *previous = AvailableUpdateTag();
+    if (tag) [NSUserDefaults.standardUserDefaults setObject:tag forKey:LatestReleaseTagKey];
+    NSString *available = AvailableUpdateTag();
+    BOOL showResult = self.updateResultRequested;
+    self.checkingForUpdate = NO;
+    self.updateResultRequested = NO;
+    [self updateAvailableReleaseIndicator];
+    if (showResult) {
+        [self refreshSettings];
+        [self showUpdateCheckResult:tag ? available : nil succeeded:tag != nil];
+    } else if (available && ![previous isEqualToString:available]) {
+        [self announceUpdate:available];
+    }
+}
+
+- (void)showUpdateCheckResult:(NSString *)tag succeeded:(BOOL)succeeded {
+    if (!self.settingsWindow.visible) return;
+    NSAlert *alert = [[NSAlert alloc] init];
+    if (!succeeded) {
+        alert.messageText = L(@"Не удалось проверить обновления");
+        alert.informativeText = L(@"Проверьте подключение к интернету и попробуйте ещё раз.");
+    } else if (tag) {
+        alert.messageText = [NSString stringWithFormat:L(@"Доступна версия %@"), ReleaseVersion(tag)];
+        alert.informativeText = L(@"Скачайте DMG или ZIP со страницы релиза GitHub.");
+    } else {
+        alert.messageText = L(@"Обновлений нет");
+        alert.informativeText = [NSString stringWithFormat:L(@"Установлена версия %@."), CurrentAppVersion()];
+    }
+    [alert addButtonWithTitle:tag ? L(@"Открыть страницу релиза") : @"OK"];
+    if (tag) [alert addButtonWithTitle:L(@"Позже")];
+    [alert beginSheetModalForWindow:self.settingsWindow completionHandler:^(NSModalResponse response) {
+        if (tag && response == NSAlertFirstButtonReturn) {
+            [NSWorkspace.sharedWorkspace openURL:ReleaseURL(tag)];
+        }
+    }];
+}
+
+- (void)announceUpdate:(NSString *)tag {
+    UNUserNotificationCenter *center = UNUserNotificationCenter.currentNotificationCenter;
+    [center getNotificationSettingsWithCompletionHandler:^(UNNotificationSettings *settings) {
+        if (settings.authorizationStatus != UNAuthorizationStatusAuthorized &&
+            settings.authorizationStatus != UNAuthorizationStatusProvisional) return;
+        dispatch_async(dispatch_get_main_queue(), ^{
+            if (![AvailableUpdateTag() isEqualToString:tag]) return;
+            UNMutableNotificationContent *content = [[UNMutableNotificationContent alloc] init];
+            content.title = L(@"Доступно обновление Route Shield");
+            content.body = [NSString stringWithFormat:L(@"Доступна версия %@"), ReleaseVersion(tag)];
+            content.userInfo = @{UpdateNotificationTagKey: tag};
+            NSString *identifier = [@"route-shield-update-" stringByAppendingString:tag];
+            UNNotificationRequest *request = [UNNotificationRequest requestWithIdentifier:identifier content:content trigger:nil];
+            [center addNotificationRequest:request withCompletionHandler:nil];
+        });
+    }];
+}
+
 - (void)changeConnectionField:(NSButton *)sender {
     [InterfacePreferences() setBool:sender.state == NSControlStateValueOn forKey:sender.identifier];
     if (self.prompt) [self refreshIPs];
@@ -1007,6 +1196,7 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     self.dropStatus = nil;
     if (self.welcomeWindow) [self showWelcome];
     [self refreshSettings];
+    [self updateAvailableReleaseIndicator];
 }
 
 - (void)applicationDidBecomeActive:(NSNotification *)notification {
@@ -1125,6 +1315,7 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
 - (void)applicationWillTerminate:(NSNotification *)notification {
     (void)notification;
     [self.ipMonitor stop];
+    [self.updateCheckTimer invalidate];
 }
 
 - (void)updateIPMonitoring {
@@ -1313,6 +1504,20 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     (void)center;
     (void)notification;
     completionHandler(UNNotificationPresentationOptionBanner | UNNotificationPresentationOptionList);
+}
+
+- (void)userNotificationCenter:(UNUserNotificationCenter *)center didReceiveNotificationResponse:(UNNotificationResponse *)response
+         withCompletionHandler:(void (^)(void))completionHandler {
+    (void)center;
+    NSURL *url = ReleaseURL(response.notification.request.content.userInfo[UpdateNotificationTagKey]);
+    if (url && [response.actionIdentifier isEqualToString:UNNotificationDefaultActionIdentifier]) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [NSWorkspace.sharedWorkspace openURL:url];
+            completionHandler();
+        });
+    } else {
+        completionHandler();
+    }
 }
 
 - (void)toggleLogin {
