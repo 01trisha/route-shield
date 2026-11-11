@@ -6,7 +6,7 @@
   <p><a href="https://github.com/01trisha/route-shield/releases">Download</a> · <a href="#first-run">First run</a> · <a href="#from-source">Install from source</a> · <a href="LICENSE">MIT License</a></p>
 </div>
 
-Route Shield lives in the menu bar. Choose the apps you want to check, then launch them from the Route Shield menu or a Dock shortcut. The menu and the prelaunch window show your public IPv4 and IPv6 addresses and the country associated with them.
+Route Shield lives in the menu bar. Add the apps you want to track. To check the connection before opening one, use the Route Shield menu or a Route Shield Dock shortcut. The menu and the prelaunch window show your public IPv4 and IPv6 addresses and the country associated with them.
 
 - **App list.** Drag apps from Finder and Route Shield reads their bundle IDs.
 - **Dock shortcuts.** Each shortcut uses the original app's icon and opens the IP check window.
@@ -65,7 +65,9 @@ Open the menu again and choose an app such as Claude. Review the IPv4 and IPv6 a
 
 <img src="assets/screenshots/en-before-opening.png" width="510" alt="Window showing IPv4 and IPv6 addresses and countries before opening Claude">
 
-To launch apps from the Dock, choose **Create or Update Dock Shortcuts**. Drag the shortcuts from `~/Applications/Route Shield` into the Dock in place of the original icons.
+You can also open tracked apps as usual from Finder, Spotlight, or their original Dock icons. The prelaunch window appears when you open an app through the Route Shield menu or a Route Shield shortcut.
+
+To see the prelaunch window when opening apps from the Dock, choose **Create or Update Dock Shortcuts**. Drag the shortcuts from `~/Applications/Route Shield` into the Dock in place of the original icons.
 
 Choose **Settings…** from the Route Shield menu. In **General**, choose which connection details appear in the menu and the prelaunch window, change the language, or enable launch at login or force-quit. In **Notifications**, enable notifications, choose what they include, and send a test banner with your current connection details. The **About Us** tab links to the GitHub repository.
 
@@ -93,7 +95,7 @@ When monitoring is enabled, Route Shield checks after macOS network events and a
 
 As soon as either IPv4 or IPv6 confirms a change, Route Shield requests termination of tracked apps if force-quit is enabled. It then sends one notification with the changed addresses, countries, or both. If apps were closed, a second notification lists them.
 
-**The prelaunch check applies only to apps opened through the Route Shield menu or its shortcuts.** Launching an app directly from Finder, Spotlight, or its original Dock icon bypasses the check. Force-quit runs after Route Shield detects an IP change. An app can still access the network before detection, and force-quitting can discard unsaved changes.
+**Force-quit works regardless of how you opened an app.** If enabled, Route Shield requests termination of all running apps on the list when it detects an IP change. An app can still access the network before detection, and force-quitting can discard unsaved changes.
 
 ## Build and package
 
