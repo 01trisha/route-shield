@@ -70,9 +70,9 @@ Route Shield makes HTTPS requests to [ipify](https://www.ipify.org/) for IPv4 an
 
 Route Shield sends the detected public IP addresses to Country.is to estimate the country. The **Connection country** section in the menu and prelaunch window shows separate rows for IPv4 and IPv6. The lookup leaves **Open** available as soon as the IP checks finish. [Country.is](https://country.is/)
 
-When monitoring is enabled, Route Shield checks after macOS network events, after wake, and about every two minutes. The first successful result establishes a baseline for each address family. A failed request by itself does not count as an IP change.
+When monitoring is enabled, Route Shield checks after macOS network events and after wake. The fallback check runs about every 15 seconds while force-quit is enabled and a tracked app is running. Otherwise it runs about every two minutes. The first successful result establishes a baseline for each address family. A failed request by itself does not count as an IP change.
 
-For each detected change, Route Shield sends one notification with the new IP address, country, or both. If force-quit is enabled and apps were closed, a second notification lists them.
+As soon as either IPv4 or IPv6 confirms a change, Route Shield requests termination of tracked apps if force-quit is enabled. It then sends one notification with the changed addresses, countries, or both. If apps were closed, a second notification lists them.
 
 **The prelaunch check applies only to apps opened through the Route Shield menu or its shortcuts.** Launching an app directly from Finder, Spotlight, or its original Dock icon bypasses the check. Force-quit runs after Route Shield detects an IP change. An app can still access the network before detection, and force-quitting can discard unsaved changes.
 

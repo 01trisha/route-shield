@@ -27,6 +27,9 @@ static NSString *const LastUpdateCheckKey = @"LastUpdateCheck";
 static NSString *const LatestReleaseTagKey = @"LatestReleaseTag";
 static NSString *const UpdateNotificationTagKey = @"UpdateReleaseTag";
 static const NSTimeInterval UpdateCheckInterval = 24 * 60 * 60;
+static const NSTimeInterval FastIPCheckInterval = 15;
+static const NSTimeInterval IdleIPCheckInterval = 120;
+static const NSTimeInterval MinimumIPProbeSpacing = 0.5;
 static NSString *const TrackedAppTileIdentifier = @"TrackedAppTile";
 
 typedef NS_ENUM(NSInteger, NotificationDetails) {
@@ -156,6 +159,19 @@ static NSArray<NSString *> *ParseApps(NSString *contents, NSRange *valueRange, N
 static NSArray<NSString *> *ReadApps(NSString **problem) {
     NSString *contents = ReadConfig(ConfigURL(), problem);
     return contents ? ParseApps(contents, nullptr, problem) : nil;
+}
+
+static NSArray<NSRunningApplication *> *RunningTrackedApps(NSString **problem) {
+    NSArray<NSString *> *identifiers = ReadApps(problem);
+    if (!identifiers.count) return @[];
+    NSSet<NSString *> *targets = [NSSet setWithArray:identifiers];
+    NSMutableArray<NSRunningApplication *> *running = [NSMutableArray array];
+    for (NSRunningApplication *app in NSWorkspace.sharedWorkspace.runningApplications) {
+        if (app.bundleIdentifier && [targets containsObject:app.bundleIdentifier] && !app.terminated) {
+            [running addObject:app];
+        }
+    }
+    return running;
 }
 
 // Return an owned handle so the caller's scope controls when the lock is released.
@@ -464,7 +480,7 @@ static NSFileHandle *AcquireMainInstanceLock(int *failure) {
     return [[NSFileHandle alloc] initWithFileDescriptor:fd closeOnDealloc:YES];
 }
 
-static NSData *FetchNetworkData(NSString *endpoint, NSArray<NSString *> *options, int *exitStatus) {
+static NSTask *NetworkRequest(NSString *endpoint, NSArray<NSString *> *options, NSPipe *pipe) {
     NSTask *curl = [[NSTask alloc] init];
     curl.executableURL = [NSURL fileURLWithPath:@"/usr/bin/curl"];
     NSMutableArray<NSString *> *arguments = [@[@"-q", @"--noproxy", @"*",
@@ -473,23 +489,32 @@ static NSData *FetchNetworkData(NSString *endpoint, NSArray<NSString *> *options
     [arguments addObjectsFromArray:options];
     [arguments addObject:endpoint];
     curl.arguments = arguments;
-    NSPipe *pipe = [NSPipe pipe];
     curl.standardOutput = pipe;
-    if (![curl launchAndReturnError:nil]) {
-        *exitStatus = -1;
-        return nil;
-    }
+    return curl;
+}
+
+static NSData *ReadNetworkResponse(NSTask *curl, NSPipe *pipe, int *exitStatus) {
     NSData *data = [pipe.fileHandleForReading readDataToEndOfFile];
     [curl waitUntilExit];
     *exitStatus = curl.terminationStatus;
     return *exitStatus == 0 ? data : nil;
 }
 
-static NSString *LookupIP(int family) {
+static NSData *FetchNetworkData(NSString *endpoint, NSArray<NSString *> *options, int *exitStatus) {
+    NSPipe *pipe = [NSPipe pipe];
+    NSTask *curl = NetworkRequest(endpoint, options, pipe);
+    if ([curl launchAndReturnError:nil]) return ReadNetworkResponse(curl, pipe, exitStatus);
+    *exitStatus = -1;
+    return nil;
+}
+
+static NSTask *IPRequest(int family, NSPipe *pipe) {
     // Use a fixed source per family so a provider change can't trigger an IP change.
     NSString *endpoint = family == AF_INET ? @"https://api.ipify.org" : @"https://ifconfig.me/ip";
-    int status;
-    NSData *data = FetchNetworkData(endpoint, @[family == AF_INET ? @"-4" : @"-6"], &status);
+    return NetworkRequest(endpoint, @[family == AF_INET ? @"-4" : @"-6"], pipe);
+}
+
+static NSString *IPResult(NSData *data, int status, int family) {
     if (status == -1) return L(@"Не удалось запустить curl");
     if (!data) return [NSString stringWithFormat:L(@"Не удалось получить (curl %d)"), status];
 
@@ -503,6 +528,14 @@ static NSString *LookupIP(int family) {
     return [NSString stringWithUTF8String:normalized];
 }
 
+static void DeliverNetworkResult(dispatch_block_t result) {
+    // Deliver results even while AppKit is tracking the open menu.
+    CFRunLoopRef mainLoop = CFRunLoopGetMain();
+    NSArray *modes = @[NSRunLoopCommonModes, NSEventTrackingRunLoopMode];
+    CFRunLoopPerformBlock(mainLoop, (__bridge CFArrayRef)modes, result);
+    CFRunLoopWakeUp(mainLoop);
+}
+
 static void RunNetworkChecks(NSString *(^lookup)(int), void (^complete)(NSString *, NSString *)) {
     dispatch_group_t checks = dispatch_group_create();
     dispatch_queue_t queue = dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0);
@@ -510,17 +543,36 @@ static void RunNetworkChecks(NSString *(^lookup)(int), void (^complete)(NSString
     __block NSString *ipv6 = nil;
     dispatch_group_async(checks, queue, ^{ ipv4 = lookup(AF_INET); });
     dispatch_group_async(checks, queue, ^{ ipv6 = lookup(AF_INET6); });
-    dispatch_group_notify(checks, queue, ^{
-        // Deliver results even while AppKit is tracking the open menu.
-        CFRunLoopRef mainLoop = CFRunLoopGetMain();
-        NSArray *modes = @[NSRunLoopCommonModes, NSEventTrackingRunLoopMode];
-        CFRunLoopPerformBlock(mainLoop, (__bridge CFArrayRef)modes, ^{ complete(ipv4, ipv6); });
-        CFRunLoopWakeUp(mainLoop);
+    dispatch_group_notify(checks, queue, ^{ DeliverNetworkResult(^{ complete(ipv4, ipv6); }); });
+}
+
+static NSTask *StartIPProbe(int family, void (^complete)(NSString *)) {
+    NSPipe *pipe = [NSPipe pipe];
+    NSTask *curl = IPRequest(family, pipe);
+    if (![curl launchAndReturnError:nil]) {
+        DeliverNetworkResult(^{ complete(IPResult(nil, -1, family)); });
+        return nil;
+    }
+    dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
+        int status;
+        NSData *data = ReadNetworkResponse(curl, pipe, &status);
+        NSString *sample = IPResult(data, status, family);
+        DeliverNetworkResult(^{ complete(sample); });
     });
+    return curl;
 }
 
 static void CheckIPs(void (^complete)(NSString *, NSString *)) {
-    RunNetworkChecks(^NSString *(int family) { return LookupIP(family); }, complete);
+    __block NSString *ipv4 = nil;
+    __block NSString *ipv6 = nil;
+    StartIPProbe(AF_INET, ^(NSString *sample) {
+        ipv4 = sample;
+        if (ipv6) complete(ipv4, ipv6);
+    });
+    StartIPProbe(AF_INET6, ^(NSString *sample) {
+        ipv6 = sample;
+        if (ipv4) complete(ipv4, ipv6);
+    });
 }
 
 static BOOL IsIPAddress(NSString *sample, int family) {
@@ -641,8 +693,10 @@ static NSTabViewItem *SettingsTab(NSString *identifier, NSString *title, NSArray
     return tab;
 }
 
+typedef void (^IPChangeCompletion)(NSString *, NSString *);
+
 @interface IPMonitor : NSObject
-- (instancetype)initWithHandler:(void (^)(NSString *, NSString *))handler;
+- (instancetype)initWithHandler:(IPChangeCompletion (^)(void))handler;
 - (void)checkWithResult:(void (^)(NSString *, NSString *))result;
 - (void)stop;
 - (void)networkChanged;
@@ -655,22 +709,25 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
 }
 
 @implementation IPMonitor {
-    void (^_handler)(NSString *, NSString *);
+    IPChangeCompletion (^_handler)(void);
     void (^_showResult)(NSString *, NSString *);
     SCDynamicStoreRef _store;
     CFRunLoopSourceRef _source;
     nw_path_monitor_t _pathMonitor;
     NSTimer *_periodic;
     NSTimer *_debounce;
+    NSTimer *_retry;
+    NSTask *_ipv4Probe;
+    NSTask *_ipv6Probe;
     id _wakeObserver;
     NSString *_lastIPv4;
     NSString *_lastIPv6;
     NSUInteger _networkRevision;
+    NSTimeInterval _lastProbeStart;
     BOOL _checking;
-    BOOL _checkAgain;
 }
 
-- (instancetype)initWithHandler:(void (^)(NSString *, NSString *))handler {
+- (instancetype)initWithHandler:(IPChangeCompletion (^)(void))handler {
     self = [super init];
     if (!self) return nil;
     _handler = [handler copy];
@@ -700,25 +757,34 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
             (void)notification;
             [weakSelf networkChanged];
         }];
-    _periodic = [NSTimer timerWithTimeInterval:120 repeats:YES block:^(NSTimer *timer) {
+    _periodic = [NSTimer timerWithTimeInterval:FastIPCheckInterval repeats:YES block:^(NSTimer *timer) {
         (void)timer;
-        [weakSelf check];
+        IPMonitor *monitor = weakSelf;
+        if (!monitor || monitor->_checking || monitor->_debounce.valid) return;
+        NSTimeInterval elapsed = NSProcessInfo.processInfo.systemUptime - monitor->_lastProbeStart;
+        NSString *problem = nil;
+        if (elapsed >= IdleIPCheckInterval ||
+            ([NSUserDefaults.standardUserDefaults boolForKey:ForceCloseOnIPChangeKey] && RunningTrackedApps(&problem).count)) {
+            [monitor checkAfterNetworkChange:NO];
+        }
     }];
-    _periodic.tolerance = 10;
+    _periodic.tolerance = 1;
     [NSRunLoop.mainRunLoop addTimer:_periodic forMode:NSRunLoopCommonModes];
-    [self check];
+    [self checkAfterNetworkChange:NO];
     return self;
 }
 
 - (void)stop {
     _handler = nil;
     _showResult = nil;
+    [self cancelProbes];
     if (_pathMonitor) {
         nw_path_monitor_cancel(_pathMonitor);
         _pathMonitor = nil;
     }
     [_periodic invalidate];
     [_debounce invalidate];
+    [_retry invalidate];
     if (_wakeObserver) {
         [NSWorkspace.sharedWorkspace.notificationCenter removeObserver:_wakeObserver];
         _wakeObserver = nil;
@@ -734,50 +800,86 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     }
 }
 
-- (void)networkChanged {
-    if (!_handler) return;
+- (void)cancelProbes {
     _networkRevision++;
-    [_debounce invalidate];
+    if (_ipv4Probe.running) [_ipv4Probe terminate];
+    if (_ipv6Probe.running) [_ipv6Probe terminate];
+    _ipv4Probe = nil;
+    _ipv6Probe = nil;
+    _checking = NO;
+}
+
+- (void)networkChanged {
+    if (!_handler || _debounce.valid) return;
+    [self cancelProbes];
+    [_retry invalidate];
+    NSTimeInterval elapsed = NSProcessInfo.processInfo.systemUptime - _lastProbeStart;
+    NSTimeInterval delay = MAX(0.15, MinimumIPProbeSpacing - elapsed);
     __weak IPMonitor *weakSelf = self;
-    _debounce = [NSTimer timerWithTimeInterval:1 repeats:NO block:^(NSTimer *timer) {
+    _debounce = [NSTimer timerWithTimeInterval:delay repeats:NO block:^(NSTimer *timer) {
         (void)timer;
         IPMonitor *monitor = weakSelf;
         if (!monitor) return;
         monitor->_debounce = nil;
-        [monitor check];
+        [monitor checkAfterNetworkChange:YES];
     }];
     [NSRunLoop.mainRunLoop addTimer:_debounce forMode:NSRunLoopCommonModes];
 }
 
 - (void)checkWithResult:(void (^)(NSString *, NSString *))result {
     _showResult = [result copy];
-    if (!_checking) [self check];
+    [self checkAfterNetworkChange:NO];
 }
 
-- (void)check {
-    if (!_handler || _debounce.valid) return;
-    if (_checking) {
-        _checkAgain = YES;
-        return;
-    }
+- (void)checkAfterNetworkChange:(BOOL)networkChange {
+    if (!_handler || _debounce.valid || _checking) return;
+    [_retry invalidate];
     _checking = YES;
-    _checkAgain = NO;
+    _lastProbeStart = NSProcessInfo.processInfo.systemUptime;
     NSUInteger revision = _networkRevision;
     __weak IPMonitor *weakSelf = self;
-    CheckIPs(^(NSString *ipv4, NSString *ipv6) {
+    __block NSInteger outstanding = 2;
+    __block NSString *ipv4 = nil;
+    __block NSString *ipv6 = nil;
+    __block NSString *changed4 = nil;
+    __block NSString *changed6 = nil;
+    __block IPChangeCompletion finishChange = nil;
+    void (^receive)(int, NSString *) = ^(int family, NSString *sample) {
         IPMonitor *monitor = weakSelf;
-        if (!monitor || !monitor->_handler) return;
-        monitor->_checking = NO;
-        if (revision == monitor->_networkRevision) {
-            BOOL changed4 = UpdateKnownAddress(ipv4, AF_INET, &monitor->_lastIPv4);
-            BOOL changed6 = UpdateKnownAddress(ipv6, AF_INET6, &monitor->_lastIPv6);
-            if (changed4 || changed6) monitor->_handler(changed4 ? ipv4 : nil, changed6 ? ipv6 : nil);
-            void (^showResult)(NSString *, NSString *) = monitor->_showResult;
-            monitor->_showResult = nil;
-            if (showResult) showResult(ipv4, ipv6);
+        BOOL current = monitor && monitor->_handler && revision == monitor->_networkRevision;
+        if (current) {
+            if (family == AF_INET) {
+                ipv4 = sample;
+                if (UpdateKnownAddress(sample, family, &monitor->_lastIPv4)) changed4 = sample;
+            } else {
+                ipv6 = sample;
+                if (UpdateKnownAddress(sample, family, &monitor->_lastIPv6)) changed6 = sample;
+            }
+            // Start termination on the first confirmed change and finish the alert with both results.
+            if ((changed4 || changed6) && !finishChange) finishChange = monitor->_handler();
         }
-        if (monitor->_checkAgain) [monitor check];
-    });
+        if (--outstanding != 0) return;
+        if (finishChange) finishChange(changed4, changed6);
+        if (!current) return;
+        monitor->_checking = NO;
+        monitor->_ipv4Probe = nil;
+        monitor->_ipv6Probe = nil;
+        void (^showResult)(NSString *, NSString *) = monitor->_showResult;
+        monitor->_showResult = nil;
+        if (showResult) showResult(ipv4, ipv6);
+        if (networkChange && !finishChange) [monitor retryAfterNetworkChange];
+    };
+    _ipv4Probe = StartIPProbe(AF_INET, ^(NSString *sample) { receive(AF_INET, sample); });
+    _ipv6Probe = StartIPProbe(AF_INET6, ^(NSString *sample) { receive(AF_INET6, sample); });
+}
+
+- (void)retryAfterNetworkChange {
+    __weak IPMonitor *weakSelf = self;
+    _retry = [NSTimer timerWithTimeInterval:0.75 repeats:NO block:^(NSTimer *timer) {
+        (void)timer;
+        [weakSelf checkAfterNetworkChange:NO];
+    }];
+    [NSRunLoop.mainRunLoop addTimer:_retry forMode:NSRunLoopCommonModes];
 }
 @end
 
@@ -1492,8 +1594,8 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
         self.lastIPEvent = nil;
     } else if (!self.ipMonitor) {
         __weak GuardApp *weakSelf = self;
-        self.ipMonitor = [[IPMonitor alloc] initWithHandler:^(NSString *ipv4, NSString *ipv6) {
-            [weakSelf handleIPChangeWithIPv4:ipv4 ipv6:ipv6];
+        self.ipMonitor = [[IPMonitor alloc] initWithHandler:^IPChangeCompletion {
+            return [weakSelf beginIPChange];
         }];
     }
 }
@@ -1553,17 +1655,17 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     NSMutableArray<NSRunningApplication *> *pending = [NSMutableArray array];
     NSMutableDictionary<NSNumber *, NSString *> *names = [NSMutableDictionary dictionary];
     if (!self.closingPIDs) self.closingPIDs = [NSMutableSet set];
-    for (NSString *identifier in ReadApps(&problem)) {
-        for (NSRunningApplication *app in [NSRunningApplication runningApplicationsWithBundleIdentifier:identifier]) {
-            NSNumber *pid = @(app.processIdentifier);
-            if (app.terminated || [self.closingPIDs containsObject:pid]) continue;
-            running++;
-            NSString *name = app.localizedName ?: identifier;
-            if (![app forceTerminate]) continue;
-            [self.closingPIDs addObject:pid];
-            [pending addObject:app];
-            names[pid] = name;
-        }
+    for (NSRunningApplication *app in RunningTrackedApps(&problem)) {
+        NSNumber *pid = @(app.processIdentifier);
+        if ([self.closingPIDs containsObject:pid]) continue;
+        running++;
+        if (![app forceTerminate]) continue;
+        [self.closingPIDs addObject:pid];
+        [pending addObject:app];
+    }
+    for (NSRunningApplication *app in pending) {
+        NSNumber *pid = @(app.processIdentifier);
+        names[pid] = app.localizedName ?: app.bundleIdentifier ?: pid.stringValue;
     }
     self.lastIPEvent = problem ? [self.lastIPEvent stringByAppendingString:L(@" · ошибка в .env")] :
         [self.lastIPEvent stringByAppendingFormat:L(@" · запросов на закрытие %lu из %lu"),
@@ -1581,7 +1683,7 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
             BOOL terminated = app.terminated;
             if (!terminated && !expired) continue;
             NSNumber *pid = @(app.processIdentifier);
-            if (terminated) [closed addObject:names[pid]];
+            if (terminated && names[pid]) [closed addObject:names[pid]];
             [self.closingPIDs removeObject:pid];
             [pending removeObjectIdenticalTo:app];
         }
@@ -1592,7 +1694,7 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     [NSRunLoop.mainRunLoop addTimer:confirmation forMode:NSRunLoopCommonModes];
 }
 
-- (void)handleIPChangeWithIPv4:(NSString *)ipv4 ipv6:(NSString *)ipv6 {
+- (IPChangeCompletion)beginIPChange {
     NSUserDefaults *settings = NSUserDefaults.standardUserDefaults;
     NSString *time = [NSDateFormatter localizedStringFromDate:NSDate.date
         dateStyle:NSDateFormatterNoStyle timeStyle:NSDateFormatterMediumStyle];
@@ -1600,7 +1702,15 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     BOOL notify = [settings boolForKey:NotifyIPChangesKey];
     dispatch_group_t event = dispatch_group_create();
     __block NSArray<NSString *> *closed = nil;
-    if (notify) {
+    if ([settings boolForKey:ForceCloseOnIPChangeKey]) {
+        dispatch_group_enter(event);
+        [self closeTrackedAppsWithCompletion:^(NSArray<NSString *> *names) {
+            closed = names;
+            dispatch_group_leave(event);
+        }];
+    }
+    return ^(NSString *ipv4, NSString *ipv6) {
+        if (!notify || ![settings boolForKey:NotifyIPChangesKey]) return;
         NotificationDetails details = (NotificationDetails)[settings integerForKey:NotificationDetailsKey];
         dispatch_group_enter(event);
         CheckNotificationBody(details, ipv4, ipv6, ^(NSString *body) {
@@ -1614,22 +1724,13 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
                     dispatch_group_leave(event);
                 }];
         });
-    }
-    if ([settings boolForKey:ForceCloseOnIPChangeKey]) {
-        dispatch_group_enter(event);
-        [self closeTrackedAppsWithCompletion:^(NSArray<NSString *> *names) {
-            closed = names;
-            dispatch_group_leave(event);
-        }];
-    }
-    if (notify) {
         dispatch_group_notify(event, dispatch_get_main_queue(), ^{
             if (closed.count && [settings boolForKey:NotifyIPChangesKey]) {
                 [self postIPNotification:L(@"Приложения закрыты после смены IP")
                     body:[closed componentsJoinedByString:@"\n"] completion:nil];
             }
         });
-    }
+    };
 }
 
 - (void)postIPNotification:(NSString *)title body:(NSString *)body completion:(void (^)(NSError *))completion {
