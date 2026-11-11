@@ -32,8 +32,12 @@ static NSUserDefaults *LanguagePreferences() {
     return preferences;
 }
 
+static BOOL UsesEnglish() {
+    return [[LanguagePreferences() stringForKey:LanguageKey] isEqualToString:@"en"];
+}
+
 static NSString *L(NSString *russian) {
-    if (![[LanguagePreferences() stringForKey:LanguageKey] isEqualToString:@"en"]) return russian;
+    if (!UsesEnglish()) return russian;
     static NSBundle *english;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
@@ -319,24 +323,34 @@ static void ShowMessage(NSString *title, NSString *detail) {
     [alert runModal];
 }
 
-static NSString *LookupIP(int family) {
+static NSData *FetchNetworkData(NSString *endpoint, NSArray<NSString *> *options, int *exitStatus) {
     NSTask *curl = [[NSTask alloc] init];
     curl.executableURL = [NSURL fileURLWithPath:@"/usr/bin/curl"];
-    // Use a fixed source per family so a provider change can't trigger an IP change.
-    NSString *endpoint = family == AF_INET ? @"https://api.ipify.org" : @"https://ifconfig.me/ip";
-    curl.arguments = @[@"-q", family == AF_INET ? @"-4" : @"-6", @"--noproxy", @"*",
+    NSMutableArray<NSString *> *arguments = [@[@"-q", @"--noproxy", @"*",
         @"--fail", @"--silent", @"--connect-timeout", @"3", @"--max-time", @"6",
-        @"--max-filesize", @"1024", endpoint];
+        @"--max-filesize", @"1024"] mutableCopy];
+    [arguments addObjectsFromArray:options];
+    [arguments addObject:endpoint];
+    curl.arguments = arguments;
     NSPipe *pipe = [NSPipe pipe];
     curl.standardOutput = pipe;
     if (![curl launchAndReturnError:nil]) {
-        return L(@"Не удалось запустить curl");
+        *exitStatus = -1;
+        return nil;
     }
     NSData *data = [pipe.fileHandleForReading readDataToEndOfFile];
     [curl waitUntilExit];
-    if (curl.terminationStatus != 0) {
-        return [NSString stringWithFormat:L(@"Не удалось получить (curl %d)"), curl.terminationStatus];
-    }
+    *exitStatus = curl.terminationStatus;
+    return *exitStatus == 0 ? data : nil;
+}
+
+static NSString *LookupIP(int family) {
+    // Use a fixed source per family so a provider change can't trigger an IP change.
+    NSString *endpoint = family == AF_INET ? @"https://api.ipify.org" : @"https://ifconfig.me/ip";
+    int status;
+    NSData *data = FetchNetworkData(endpoint, @[family == AF_INET ? @"-4" : @"-6"], &status);
+    if (status == -1) return L(@"Не удалось запустить curl");
+    if (!data) return [NSString stringWithFormat:L(@"Не удалось получить (curl %d)"), status];
 
     NSString *address = Trim([[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding]);
     struct in6_addr parsed = {};
@@ -348,13 +362,13 @@ static NSString *LookupIP(int family) {
     return [NSString stringWithUTF8String:normalized];
 }
 
-static void CheckIPs(void (^complete)(NSString *, NSString *)) {
+static void RunNetworkChecks(NSString *(^lookup)(int), void (^complete)(NSString *, NSString *)) {
     dispatch_group_t checks = dispatch_group_create();
     dispatch_queue_t queue = dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0);
     __block NSString *ipv4 = nil;
     __block NSString *ipv6 = nil;
-    dispatch_group_async(checks, queue, ^{ ipv4 = LookupIP(AF_INET); });
-    dispatch_group_async(checks, queue, ^{ ipv6 = LookupIP(AF_INET6); });
+    dispatch_group_async(checks, queue, ^{ ipv4 = lookup(AF_INET); });
+    dispatch_group_async(checks, queue, ^{ ipv6 = lookup(AF_INET6); });
     dispatch_group_notify(checks, queue, ^{
         // Deliver results even while AppKit is tracking the open menu.
         CFRunLoopRef mainLoop = CFRunLoopGetMain();
@@ -364,9 +378,75 @@ static void CheckIPs(void (^complete)(NSString *, NSString *)) {
     });
 }
 
-static BOOL UpdateKnownAddress(NSString *sample, int family, NSString *__strong *previous) {
+static void CheckIPs(void (^complete)(NSString *, NSString *)) {
+    RunNetworkChecks(^NSString *(int family) { return LookupIP(family); }, complete);
+}
+
+static BOOL IsIPAddress(NSString *sample, int family) {
     struct in6_addr parsed = {};
-    if (sample.length == 0 || inet_pton(family, sample.UTF8String, &parsed) != 1) return NO;
+    return sample.length > 0 && inet_pton(family, sample.UTF8String, &parsed) == 1;
+}
+
+static NSString *CountryCodeFromResponse(NSData *data) {
+    if (!data) return nil;
+    id response = [NSJSONSerialization JSONObjectWithData:data options:0 error:nil];
+    id code = [response isKindOfClass:NSDictionary.class] ? response[@"country"] : nil;
+    return [code isKindOfClass:NSString.class] && [NSLocale.ISOCountryCodes containsObject:code] ? code : nil;
+}
+
+static NSString *LookupCountryCode(NSString *address) {
+    static NSCache<NSString *, NSString *> *countries;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        countries = [[NSCache alloc] init];
+        countries.countLimit = 64;
+    });
+    NSString *code = [countries objectForKey:address];
+    if (code) return code;
+
+    // The caller supplies a validated IP literal, so it is safe as a single URL path component.
+    NSString *endpoint = [@"https://api.country.is/" stringByAppendingString:address];
+    int status;
+    code = CountryCodeFromResponse(FetchNetworkData(endpoint, @[], &status));
+    if (code) [countries setObject:code forKey:address];
+    return code;
+}
+
+static NSString *CountryLine(NSString *detail) {
+    return [NSString stringWithFormat:L(@"Страна по IP: %@"), detail];
+}
+
+static NSString *CountrySummary(NSString *code4, NSString *code6, BOOL hasIPv4, BOOL hasIPv6) {
+    NSString *unknown = L(@"не определена");
+    if (!code4 && !code6) return CountryLine(unknown);
+
+    NSLocale *locale = [NSLocale localeWithLocaleIdentifier:UsesEnglish() ? @"en" : @"ru"];
+    NSString *country4 = code4 ? ([locale localizedStringForCountryCode:code4] ?: code4) : nil;
+    NSString *country6 = code6 ? ([locale localizedStringForCountryCode:code6] ?: code6) : nil;
+    if (hasIPv4 && hasIPv6 && ![code4 isEqualToString:code6]) {
+        return CountryLine([NSString stringWithFormat:@"IPv4: %@ · IPv6: %@",
+            country4 ?: unknown, country6 ?: unknown]);
+    }
+    return CountryLine(country4 ?: country6);
+}
+
+static void CheckCountries(NSString *ipv4, NSString *ipv6, void (^complete)(NSString *)) {
+    BOOL hasIPv4 = IsIPAddress(ipv4, AF_INET);
+    BOOL hasIPv6 = IsIPAddress(ipv6, AF_INET6);
+    if (!hasIPv4 && !hasIPv6) {
+        complete(CountrySummary(nil, nil, NO, NO));
+        return;
+    }
+    RunNetworkChecks(^NSString *(int family) {
+        if (family == AF_INET) return hasIPv4 ? LookupCountryCode(ipv4) : nil;
+        return hasIPv6 ? LookupCountryCode(ipv6) : nil;
+    }, ^(NSString *code4, NSString *code6) {
+        complete(CountrySummary(code4, code6, hasIPv4, hasIPv6));
+    });
+}
+
+static BOOL UpdateKnownAddress(NSString *sample, int family, NSString *__strong *previous) {
+    if (!IsIPAddress(sample, family)) return NO;
     BOOL changed = *previous && ![*previous isEqualToString:sample];
     *previous = sample;
     return changed;
@@ -528,6 +608,8 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
 @property (strong) NSWindow *prompt;
 @property (strong) NSTextField *ipv4;
 @property (strong) NSTextField *ipv6;
+@property (strong) NSTextField *country;
+@property NSUInteger promptCheckRevision;
 @property (strong) NSButton *refreshButton;
 @property (strong) NSButton *openButton;
 @property (copy) NSString *pendingTarget;
@@ -575,6 +657,7 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     [self addItem:L(@"Текущее соединение") action:nullptr toMenu:menu];
     NSMenuItem *ipv4Item = [self addItem:L(@"IPv4   Проверяю…") action:nullptr toMenu:menu];
     NSMenuItem *ipv6Item = [self addItem:L(@"IPv6   Проверяю…") action:nullptr toMenu:menu];
+    NSMenuItem *countryItem = [self addItem:CountryLine(L(@"Определяю…")) action:nullptr toMenu:menu];
     NSMenuItem *monitorItem = nil;
     if (self.ipMonitor) {
         monitorItem = [self addItem:self.lastIPEvent ?: L(@"Мониторинг включён · смена IP ещё не обнаружена")
@@ -585,6 +668,7 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
         ipv4Item.title = [@"IPv4   " stringByAppendingString:ipv4];
         ipv6Item.title = [@"IPv6   " stringByAppendingString:ipv6];
         monitorItem.title = weakSelf.lastIPEvent ?: L(@"Мониторинг включён · смена IP ещё не обнаружена");
+        CheckCountries(ipv4, ipv6, ^(NSString *country) { countryItem.title = country; });
     };
     if (self.ipMonitor) {
         [self.ipMonitor checkWithResult:display];
@@ -634,7 +718,7 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
 
     NSPopUpButton *languages = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
     [languages addItemsWithTitles:@[@"Русский", @"English"]];
-    [languages selectItemAtIndex:[[LanguagePreferences() stringForKey:LanguageKey] isEqualToString:@"en"] ? 1 : 0];
+    [languages selectItemAtIndex:UsesEnglish() ? 1 : 0];
     languages.target = self;
     languages.action = @selector(changeLanguage:);
     [languages setAccessibilityLabel:L(@"Язык интерфейса")];
@@ -1010,7 +1094,7 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     }
 
     self.pendingTarget = identifier;
-    self.prompt = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 510, 250)
+    self.prompt = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 510, 290)
         styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable backing:NSBackingStoreBuffered defer:NO];
     self.prompt.releasedWhenClosed = NO;
     self.prompt.title = GuardName;
@@ -1023,6 +1107,8 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
         L(@"Сверьте внешние адреса с адресами VPN перед запуском.")];
     self.ipv4 = [NSTextField labelWithString:@""];
     self.ipv6 = [NSTextField labelWithString:@""];
+    self.country = [NSTextField wrappingLabelWithString:@""];
+    self.country.selectable = YES;
     for (NSTextField *label in @[self.ipv4, self.ipv6]) {
         label.font = [NSFont monospacedSystemFontOfSize:13 weight:NSFontWeightRegular];
         label.selectable = YES;
@@ -1035,11 +1121,11 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     NSStackView *buttons = [NSStackView stackViewWithViews:@[self.refreshButton, cancel, self.openButton]];
     buttons.spacing = 9;
 
-    NSStackView *stack = [NSStackView stackViewWithViews:@[heading, help, self.ipv4, self.ipv6, buttons]];
+    NSStackView *stack = [NSStackView stackViewWithViews:@[heading, help, self.ipv4, self.ipv6, self.country, buttons]];
     stack.orientation = NSUserInterfaceLayoutOrientationVertical;
     stack.alignment = NSLayoutAttributeLeading;
     stack.spacing = 12;
-    [stack setCustomSpacing:20 afterView:self.ipv6];
+    [stack setCustomSpacing:20 afterView:self.country];
     stack.translatesAutoresizingMaskIntoConstraints = NO;
     NSView *view = self.prompt.contentView;
     [view addSubview:stack];
@@ -1049,7 +1135,8 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
         [stack.topAnchor constraintEqualToAnchor:view.topAnchor constant:22],
         [stack.bottomAnchor constraintEqualToAnchor:view.bottomAnchor constant:-22],
         [heading.widthAnchor constraintLessThanOrEqualToAnchor:stack.widthAnchor],
-        [help.widthAnchor constraintEqualToAnchor:stack.widthAnchor]
+        [help.widthAnchor constraintEqualToAnchor:stack.widthAnchor],
+        [self.country.widthAnchor constraintEqualToAnchor:stack.widthAnchor]
     ]];
 
     [self refreshIPs];
@@ -1061,16 +1148,23 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
 
 - (void)refreshIPs {
     NSWindow *prompt = self.prompt;
+    NSUInteger revision = ++self.promptCheckRevision;
     self.ipv4.stringValue = L(@"IPv4   Проверяю…");
     self.ipv6.stringValue = L(@"IPv6   Проверяю…");
+    self.country.stringValue = CountryLine(L(@"Определяю…"));
     self.openButton.enabled = NO;
     self.refreshButton.enabled = NO;
     CheckIPs(^(NSString *ipv4, NSString *ipv6) {
-        if (self.prompt != prompt) return;
+        if (self.prompt != prompt || self.promptCheckRevision != revision) return;
         self.ipv4.stringValue = [@"IPv4   " stringByAppendingString:ipv4];
         self.ipv6.stringValue = [@"IPv6   " stringByAppendingString:ipv6];
         self.refreshButton.enabled = YES;
         self.openButton.enabled = YES;
+        CheckCountries(ipv4, ipv6, ^(NSString *country) {
+            if (self.prompt == prompt && self.promptCheckRevision == revision) {
+                self.country.stringValue = country;
+            }
+        });
     });
 }
 

@@ -6,7 +6,7 @@
   <p><a href="https://github.com/01trisha/route-shield/releases">Download</a> · <a href="#from-source">Install from source</a> · <a href="LICENSE">MIT License</a></p>
 </div>
 
-Route Shield lives in the menu bar. Choose the apps you want to check, then launch them from the shield menu or a Dock shortcut. Route Shield shows your public IPv4 and IPv6 addresses and asks for confirmation before opening the app.
+Route Shield lives in the menu bar. Choose the apps you want to check, then launch them from the shield menu or a Dock shortcut. The menu and the prelaunch window show your public IPv4 and IPv6 addresses and the country associated with them.
 
 - **App list.** Drag apps from Finder and Route Shield reads their bundle IDs.
 - **Dock shortcuts.** Each shortcut uses the original app's icon and opens the IP check window.
@@ -61,6 +61,8 @@ After updating Route Shield, choose **Create or Update Dock Shortcuts** so that 
 ## How IP checks work
 
 Route Shield makes HTTPS requests to [ipify](https://www.ipify.org/) for IPv4 and [ifconfig.me](https://ifconfig.me/) for IPv6. Each service sees the public IP of the request. With split tunneling, a selected app may use a different route.
+
+Route Shield sends the detected public IP addresses to Country.is to estimate the country. If IPv4 and IPv6 map to different countries, the menu and prelaunch window show both. The lookup runs separately from monitoring and leaves **Open** available as soon as the IP checks finish. [Country.is](https://country.is/)
 
 When monitoring is enabled, Route Shield checks after macOS network events, after wake, and about every two minutes. The first successful result establishes a baseline for each address family. A failed request by itself does not count as an IP change.
 

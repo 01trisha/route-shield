@@ -8,6 +8,9 @@
 "Текущее соединение" = "Current connection";
 "IPv4   Проверяю…" = "IPv4   Checking…";
 "IPv6   Проверяю…" = "IPv6   Checking…";
+"Страна по IP: %@" = "IP country: %@";
+"Определяю…" = "Looking up…";
+"не определена" = "unavailable";
 "Мониторинг включён · смена IP ещё не обнаружена" = "Monitoring on · No IP change detected yet";
 "Список приложений пуст" = "No apps in the list";
 " (не найдено)" = " (not found)";
