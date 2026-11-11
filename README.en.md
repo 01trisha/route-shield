@@ -19,8 +19,11 @@ Route Shield lives in the menu bar. Choose the apps you want to check, then laun
 
 ### Prebuilt app
 
-1. Download `Route-Shield-v…-macOS-universal.zip` from the **Assets** list in [GitHub Releases](https://github.com/01trisha/route-shield/releases).
-2. Extract the ZIP, move **Route Shield.app** to **Applications**, and open it. A shield appears in the menu bar.
+1. Download `Route-Shield-v…-macOS-universal.dmg` from the **Assets** list in [GitHub Releases](https://github.com/01trisha/route-shield/releases).
+2. Open the DMG and drag **Route Shield.app** onto the **Applications** shortcut in the disk image. If you downloaded the ZIP, extract it and move the app to **Applications** manually.
+3. Open the app from **Applications**. A shield appears in the menu bar.
+
+Each download has a matching SHA-256 checksum.
 
 The release build uses an ad hoc signature. If Gatekeeper blocks the downloaded copy, use the source installation below. Distribution with Apple notarization requires a Developer ID signature. [Apple's notarization documentation](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution)
 
@@ -67,5 +70,5 @@ When monitoring is enabled, Route Shield checks after macOS network events, afte
 
 ```sh
 ./build.sh      # Build the .app for this Mac in build/
-./package.sh    # Build the universal .app, ZIP, and checksum in build/
+./package.sh    # Build the universal .app, DMG, ZIP, and checksums in build/
 ```

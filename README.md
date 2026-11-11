@@ -19,8 +19,11 @@ Route Shield живёт в строке меню. Вы выбираете при
 
 ### Готовое приложение
 
-1. В [GitHub Releases](https://github.com/01trisha/route-shield/releases) скачайте `Route-Shield-v…-macOS-universal.zip` из списка **Assets**.
-2. Распакуйте ZIP, перенесите **Route Shield.app** в **Программы** и откройте его. В строке меню появится щит.
+1. В [GitHub Releases](https://github.com/01trisha/route-shield/releases) скачайте `Route-Shield-v…-macOS-universal.dmg` из списка **Assets**.
+2. Откройте DMG и перетащите **Route Shield.app** на значок **Applications** внутри образа. Если скачали ZIP, распакуйте его и перенесите приложение в **Программы** вручную.
+3. Откройте приложение из папки **Программы**. В строке меню появится щит.
+
+Для каждого файла в релизе есть контрольная сумма SHA-256.
 
 Сборка подписана локальной подписью ad hoc. Если Gatekeeper блокирует скачанную копию, воспользуйтесь установкой из исходников ниже. Для распространения с нотариальной проверкой Apple потребуется подпись Developer ID. [Документация Apple](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution)
 
@@ -65,6 +68,6 @@ Route Shield делает HTTPS-запросы к [ipify](https://www.ipify.org/
 
 ```sh
 ./build.sh      # Собрать .app для текущего Mac в build/
-./package.sh    # Собрать универсальную .app, ZIP и контрольную сумму в build/
+./package.sh    # Собрать универсальную .app, DMG, ZIP и контрольные суммы в build/
 ```
 
