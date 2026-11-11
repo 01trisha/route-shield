@@ -6,7 +6,7 @@
   <p><a href="https://github.com/01trisha/route-shield/releases">Download</a> · <a href="#from-source">Install from source</a> · <a href="LICENSE">MIT License</a></p>
 </div>
 
-Route Shield lives in the menu bar. Choose the apps you want to check, then launch them from the shield menu or a Dock shortcut. The menu and the prelaunch window show your public IPv4 and IPv6 addresses and the country associated with them.
+Route Shield lives in the menu bar. Choose the apps you want to check, then launch them from the Route Shield menu or a Dock shortcut. The menu and the prelaunch window show your public IPv4 and IPv6 addresses and the country associated with them.
 
 - **App list.** Drag apps from Finder and Route Shield reads their bundle IDs.
 - **Dock shortcuts.** Each shortcut uses the original app's icon and opens the IP check window.
@@ -21,7 +21,7 @@ Route Shield lives in the menu bar. Choose the apps you want to check, then laun
 
 1. Download `Route-Shield-v…-macOS-universal.dmg` from the **Assets** list in [GitHub Releases](https://github.com/01trisha/route-shield/releases).
 2. Open the DMG and drag **Route Shield.app** onto the **Applications** shortcut in the disk image. If you downloaded the ZIP, extract it and move the app to **Applications** manually.
-3. Open the app from **Applications**. A shield appears in the menu bar.
+3. Open the app from **Applications**. The Route Shield icon appears in the menu bar.
 
 Each download has a matching SHA-256 checksum.
 
@@ -41,16 +41,16 @@ The script checks the requirements, builds the app, copies it to `/Applications/
 
 If your account cannot write to `/Applications`, run `./install.sh --user` to install the app in `~/Applications`. Use `--no-open` to install it and open it later.
 
-Before updating, quit Route Shield from the shield menu. The installer replaces the existing app bundle. Your app list and preferences are stored separately.
+Before updating, quit Route Shield from its menu. The installer replaces the existing app bundle. Your app list and preferences are stored separately.
 
 ## First run
 
 Choose your language in the welcome window and select **Continue**. Route Shield suggests Russian if Russian is your preferred macOS language and English for all other languages.
 
-1. Choose **shield → Add Apps…**. Open **Applications** in Finder and drag an app such as Calculator into the drop area.
-2. Open the shield menu again and select Calculator. Wait for the IPv4 and IPv6 checks, then choose **Open** or **Cancel**.
+1. Click the Route Shield icon in the menu bar and choose **Add Apps…**. Open **Applications** in Finder and drag an app such as Calculator into the drop area.
+2. Open the Route Shield menu again and select Calculator. Wait for the IPv4 and IPv6 checks, then choose **Open** or **Cancel**.
 3. To launch apps from the Dock, choose **Create or Update Dock Shortcuts**. Drag the shortcuts from `~/Applications/Route Shield` into the Dock in place of the original icons.
-4. Open **shield → Settings…**. In **General**, choose which connection details appear in the shield menu and the prelaunch window, change the language, or enable launch at login or force-quit. In **Notifications**, enable notifications, choose what they include, and send a test banner. The **About Us** tab links to the GitHub repository.
+4. Click the Route Shield icon and choose **Settings…**. In **General**, choose which connection details appear in the menu and the prelaunch window, change the language, or enable launch at login or force-quit. In **Notifications**, enable notifications, choose what they include, and send a test banner. The **About Us** tab links to the GitHub repository.
 
 The app list lives at `~/Library/Application Support/VPN Guard/.env`, the same path used by earlier versions. Choose **Open .env** to remove an ID from the `APPS=` line or add another ID separated by a comma.
 
@@ -68,7 +68,7 @@ When monitoring is enabled, Route Shield checks after macOS network events, afte
 
 For each detected change, Route Shield sends one notification with the new IP address, country, or both. If force-quit is enabled and apps were closed, a second notification lists them.
 
-**The prelaunch check applies only to apps opened through the shield menu or its shortcuts.** Launching an app directly from Finder, Spotlight, or its original Dock icon bypasses the check. Force-quit runs after Route Shield detects an IP change. An app can still access the network before detection, and force-quitting can discard unsaved changes.
+**The prelaunch check applies only to apps opened through the Route Shield menu or its shortcuts.** Launching an app directly from Finder, Spotlight, or its original Dock icon bypasses the check. Force-quit runs after Route Shield detects an IP change. An app can still access the network before detection, and force-quitting can discard unsaved changes.
 
 ## Build and package
 
