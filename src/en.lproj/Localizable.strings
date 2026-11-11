@@ -25,6 +25,13 @@
 "Добро пожаловать в Route Shield" = "Welcome to Route Shield";
 "Route Shield показывает внешний IP в строке меню и перед запуском выбранных приложений. При смене IP он может уведомить вас и завершить эти приложения." = "Route Shield shows your public IP in the menu bar and before you open selected apps. When your IP changes, it can notify you and close those apps.";
 "Продолжить" = "Continue";
+"Назад" = "Back";
+"Готово" = "Done";
+"Шаг %ld из 3" = "Step %ld of 3";
+"Уведомления о смене IP" = "IP change notifications";
+"Получайте уведомление при смене внешнего IP, например после подключения или отключения VPN." = "Get a notification when your public IP changes, for example after connecting to or disconnecting from a VPN.";
+"Принудительное завершение приложений" = "Force-quit apps";
+"Route Shield завершит запущенные приложения из списка при смене внешнего IP, в том числе после подключения или отключения VPN. Несохранённые данные могут потеряться." = "Route Shield will close running apps on your list if your public IP changes, including after connecting to or disconnecting from a VPN. You may lose unsaved changes.";
 "Основные" = "General";
 "Проверить обновления…" = "Check for Updates…";
 "Проверяю обновления…" = "Checking for updates…";

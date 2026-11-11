@@ -38,6 +38,12 @@ typedef NS_ENUM(NSInteger, NotificationDetails) {
     NotificationDetailsAddressAndCountry,
 };
 
+typedef NS_ENUM(NSInteger, WelcomeStep) {
+    WelcomeStepLanguage = 1,
+    WelcomeStepNotifications,
+    WelcomeStepForceClose,
+};
+
 static NSUserDefaults *InterfacePreferences() {
     if (![NSBundle.mainBundle objectForInfoDictionaryKey:TargetBundleIDKey]) {
         return NSUserDefaults.standardUserDefaults;
@@ -404,6 +410,18 @@ static void ShowMessage(NSString *title, NSString *detail) {
     [alert addButtonWithTitle:@"OK"];
     [NSApp activateIgnoringOtherApps:YES];
     [alert runModal];
+}
+
+static void RequestIPNotificationAuthorization(void (^completion)(BOOL, NSError *)) {
+    [UNUserNotificationCenter.currentNotificationCenter requestAuthorizationWithOptions:UNAuthorizationOptionAlert
+        completionHandler:^(BOOL granted, NSError *error) {
+            dispatch_async(dispatch_get_main_queue(), ^{ completion(granted, error); });
+        }];
+}
+
+static void ShowNotificationAuthorizationError(NSError *error) {
+    ShowMessage(L(@"Уведомления недоступны"), error.localizedDescription ?:
+        L(@"Разрешите уведомления для Route Shield в системных настройках и включите этот пункт снова."));
 }
 
 static NSString *ReleaseVersion(id tag) {
@@ -943,6 +961,10 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
 @property (strong) NSWindow *settingsWindow;
 @property (strong) NSTabView *settingsTabs;
 @property (strong) NSWindow *welcomeWindow;
+@property WelcomeStep welcomeStep;
+@property BOOL welcomeNotificationsEnabled;
+@property NotificationDetails welcomeNotificationDetails;
+@property BOOL welcomeForceCloseEnabled;
 @property (strong) NSBox *dropBox;
 @property (strong) NSTextField *dropStatus;
 @property (strong) NSCollectionView *trackedAppsGrid;
@@ -1099,35 +1121,148 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
 }
 
 - (void)showWelcome {
-    if (!self.welcomeWindow) {
-        self.welcomeWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 480, 235)
-            styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable backing:NSBackingStoreBuffered defer:NO];
-        self.welcomeWindow.releasedWhenClosed = NO;
-        self.welcomeWindow.delegate = self;
-        [self.welcomeWindow center];
-    }
+    NSUserDefaults *settings = InterfacePreferences();
+    self.welcomeStep = WelcomeStepLanguage;
+    self.welcomeNotificationsEnabled = [settings boolForKey:NotifyIPChangesKey];
+    self.welcomeNotificationDetails = (NotificationDetails)[settings integerForKey:NotificationDetailsKey];
+    self.welcomeForceCloseEnabled = [settings boolForKey:ForceCloseOnIPChangeKey];
+    self.welcomeWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 530, 290)
+        styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable backing:NSBackingStoreBuffered defer:NO];
+    self.welcomeWindow.releasedWhenClosed = NO;
+    self.welcomeWindow.delegate = self;
     self.welcomeWindow.title = GuardName;
-    NSTextField *heading = [NSTextField labelWithString:L(@"Добро пожаловать в Route Shield")];
-    heading.font = [NSFont boldSystemFontOfSize:21];
-    NSTextField *intro = [NSTextField wrappingLabelWithString:
-        L(@"Route Shield показывает внешний IP в строке меню и перед запуском выбранных приложений. При смене IP он может уведомить вас и завершить эти приложения.")];
-    intro.preferredMaxLayoutWidth = 432;
-    NSButton *proceed = [NSButton buttonWithTitle:L(@"Продолжить") target:self action:@selector(continueWelcome)];
-    proceed.keyEquivalent = @"\r";
-    self.welcomeWindow.contentView = StackContent(@[heading, intro, [self languageRow], proceed], 24);
+    [self.welcomeWindow center];
+    [self refreshWelcome];
     [NSApp activateIgnoringOtherApps:YES];
     [self.welcomeWindow makeKeyAndOrderFront:nil];
 }
 
+- (void)refreshWelcome {
+    NSString *title;
+    NSString *description;
+    NSArray<NSView *> *options;
+    switch (self.welcomeStep) {
+        case WelcomeStepLanguage:
+            title = L(@"Добро пожаловать в Route Shield");
+            description = L(@"Route Shield показывает внешний IP в строке меню и перед запуском выбранных приложений. При смене IP он может уведомить вас и завершить эти приложения.");
+            options = @[[self languageRow]];
+            break;
+        case WelcomeStepNotifications: {
+            title = L(@"Уведомления о смене IP");
+            description = L(@"Получайте уведомление при смене внешнего IP, например после подключения или отключения VPN.");
+            NSButton *notify = [NSButton checkboxWithTitle:L(@"Уведомлять при смене IP")
+                target:self action:@selector(changeWelcomeNotifications:)];
+            notify.state = self.welcomeNotificationsEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+            notify.enabled = !self.requestingNotifications;
+            options = @[notify, [self notificationDetailsRowWithSelection:self.welcomeNotificationDetails
+                action:@selector(changeWelcomeNotificationDetails:)]];
+            break;
+        }
+        case WelcomeStepForceClose: {
+            title = L(@"Принудительное завершение приложений");
+            description = L(@"Route Shield завершит запущенные приложения из списка при смене внешнего IP, в том числе после подключения или отключения VPN. Несохранённые данные могут потеряться.");
+            NSButton *forceClose = [NSButton checkboxWithTitle:L(@"Принудительно закрывать приложения при смене IP")
+                target:self action:@selector(changeWelcomeForceClose:)];
+            forceClose.state = self.welcomeForceCloseEnabled ? NSControlStateValueOn : NSControlStateValueOff;
+            options = @[forceClose];
+            break;
+        }
+    }
+
+    NSTextField *progress = [NSTextField labelWithString:
+        [NSString stringWithFormat:L(@"Шаг %ld из 3"), (long)self.welcomeStep]];
+    progress.textColor = NSColor.secondaryLabelColor;
+    NSTextField *heading = [NSTextField labelWithString:title];
+    heading.font = [NSFont boldSystemFontOfSize:21];
+    NSTextField *intro = [NSTextField wrappingLabelWithString:description];
+    intro.preferredMaxLayoutWidth = 482;
+    NSButton *back = [NSButton buttonWithTitle:L(@"Назад") target:self action:@selector(goBackWelcome)];
+    back.enabled = !self.requestingNotifications;
+    NSButton *proceed = [NSButton buttonWithTitle:self.welcomeStep == WelcomeStepForceClose ? L(@"Готово") : L(@"Продолжить")
+        target:self action:@selector(continueWelcome)];
+    proceed.enabled = !self.requestingNotifications;
+    proceed.keyEquivalent = @"\r";
+    NSStackView *buttons = [NSStackView stackViewWithViews:
+        self.welcomeStep == WelcomeStepLanguage ? @[proceed] : @[back, proceed]];
+    buttons.spacing = 8;
+    NSArray<NSView *> *content = [@[progress, heading, intro] arrayByAddingObjectsFromArray:options];
+    self.welcomeWindow.contentView = StackContent([content arrayByAddingObject:buttons], 24);
+}
+
+- (void)goBackWelcome {
+    if (self.requestingNotifications || self.welcomeStep == WelcomeStepLanguage) return;
+    self.welcomeStep = self.welcomeStep == WelcomeStepForceClose ? WelcomeStepNotifications : WelcomeStepLanguage;
+    [self refreshWelcome];
+}
+
+- (void)changeWelcomeNotifications:(NSButton *)sender {
+    self.welcomeNotificationsEnabled = sender.state == NSControlStateValueOn;
+}
+
+- (void)changeWelcomeNotificationDetails:(NSPopUpButton *)sender {
+    self.welcomeNotificationDetails = (NotificationDetails)sender.indexOfSelectedItem;
+}
+
+- (void)changeWelcomeForceClose:(NSButton *)sender {
+    self.welcomeForceCloseEnabled = sender.state == NSControlStateValueOn;
+}
+
 - (void)continueWelcome {
+    if (self.requestingNotifications || !self.welcomeWindow) return;
+    if (self.welcomeStep == WelcomeStepLanguage) {
+        self.welcomeStep = WelcomeStepNotifications;
+        [self refreshWelcome];
+        return;
+    }
+    if (self.welcomeStep == WelcomeStepForceClose) {
+        [self finishWelcome];
+        return;
+    }
+    if (!self.welcomeNotificationsEnabled) {
+        self.welcomeStep = WelcomeStepForceClose;
+        [self refreshWelcome];
+        return;
+    }
+
+    self.requestingNotifications = YES;
+    [self refreshWelcome];
+    RequestIPNotificationAuthorization(^(BOOL granted, NSError *error) {
+        self.requestingNotifications = NO;
+        if (!self.welcomeWindow) return;
+        self.welcomeNotificationsEnabled = granted;
+        if (granted) self.welcomeStep = WelcomeStepForceClose;
+        [self refreshWelcome];
+        if (!granted) ShowNotificationAuthorizationError(error);
+    });
+}
+
+- (void)finishWelcome {
     NSUserDefaults *settings = InterfacePreferences();
     [settings setObject:UsesEnglish() ? @"en" : @"ru" forKey:LanguageKey];
+    [settings setBool:self.welcomeNotificationsEnabled forKey:NotifyIPChangesKey];
+    [settings setInteger:self.welcomeNotificationDetails forKey:NotificationDetailsKey];
+    [settings setBool:self.welcomeForceCloseEnabled forKey:ForceCloseOnIPChangeKey];
     [settings setBool:YES forKey:WelcomeCompletedKey];
     NSWindow *window = self.welcomeWindow;
     self.welcomeWindow = nil;
     [window close];
     [self startMenuBar];
-    dispatch_async(dispatch_get_main_queue(), ^{ [self.statusItem.button performClick:nil]; });
+    [self openStatusMenuWhenReady:20];
+}
+
+- (void)openStatusMenuWhenReady:(NSUInteger)retries {
+    NSStatusBarButton *button = self.statusItem.button;
+    NSWindow *window = button.window;
+    NSScreen *screen = window.screen;
+    NSRect anchor = screen ? [window convertRectToScreen:[button convertRect:button.bounds toView:nil]] : NSZeroRect;
+    // AppKit initially reports a placeholder frame until the system places the item.
+    if (window.visible && screen && !NSIsEmptyRect(anchor) && NSContainsRect(screen.frame, anchor)) {
+        [button performClick:nil];
+    } else if (retries > 0) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, NSEC_PER_SEC / 10), dispatch_get_main_queue(), ^{
+            [self openStatusMenuWhenReady:retries - 1];
+        });
+    }
 }
 
 - (void)showSettings {
@@ -1187,6 +1322,19 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     return controls;
 }
 
+- (NSStackView *)notificationDetailsRowWithSelection:(NSInteger)selection action:(SEL)action {
+    NSPopUpButton *details = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+    [details addItemsWithTitles:@[L(@"IP-адрес"), L(@"Страна"), L(@"IP-адрес и страна")]];
+    [details selectItemAtIndex:selection];
+    details.target = self;
+    details.action = action;
+    [details setAccessibilityLabel:L(@"Содержимое уведомления")];
+    NSStackView *row = [NSStackView stackViewWithViews:
+        @[[NSTextField labelWithString:L(@"Содержимое уведомления")], details]];
+    row.spacing = 12;
+    return row;
+}
+
 - (NSArray<NSView *> *)notificationControls {
     NSUserDefaults *settings = NSUserDefaults.standardUserDefaults;
     BOOL enabled = [settings boolForKey:NotifyIPChangesKey];
@@ -1194,19 +1342,12 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
         target:self action:@selector(toggleIPNotifications)];
     notify.state = enabled ? NSControlStateValueOn : NSControlStateValueOff;
     notify.enabled = !self.requestingNotifications;
-    NSPopUpButton *details = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
-    [details addItemsWithTitles:@[L(@"IP-адрес"), L(@"Страна"), L(@"IP-адрес и страна")]];
-    [details selectItemAtIndex:[settings integerForKey:NotificationDetailsKey]];
-    details.target = self;
-    details.action = @selector(changeNotificationDetails:);
-    [details setAccessibilityLabel:L(@"Содержимое уведомления")];
-    NSStackView *row = [NSStackView stackViewWithViews:
-        @[[NSTextField labelWithString:L(@"Содержимое уведомления")], details]];
-    row.spacing = 12;
+    NSStackView *details = [self notificationDetailsRowWithSelection:[settings integerForKey:NotificationDetailsKey]
+        action:@selector(changeNotificationDetails:)];
     NSButton *test = [NSButton buttonWithTitle:self.testingNotification ? L(@"Проверяю соединение…") : L(@"Проверить уведомление")
         target:self action:@selector(testIPNotification)];
     test.enabled = enabled && !self.testingNotification;
-    return @[notify, row, test];
+    return @[notify, details, test];
 }
 
 - (void)refreshSettings {
@@ -1361,7 +1502,7 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     self.dropStatus = nil;
     self.trackedAppsGrid = nil;
     self.trackedAppsEmptyLabel = nil;
-    if (self.welcomeWindow) [self showWelcome];
+    if (self.welcomeWindow) [self refreshWelcome];
     [self refreshSettings];
     [self updateAvailableReleaseIndicator];
 }
@@ -1612,20 +1753,16 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     if (self.requestingNotifications) return;
     self.requestingNotifications = YES;
     [self refreshSettings];
-    [UNUserNotificationCenter.currentNotificationCenter requestAuthorizationWithOptions:UNAuthorizationOptionAlert
-        completionHandler:^(BOOL granted, NSError *error) {
-            dispatch_async(dispatch_get_main_queue(), ^{
-                self.requestingNotifications = NO;
-                if (granted) {
-                    [settings setBool:YES forKey:NotifyIPChangesKey];
-                    [self updateIPMonitoring];
-                } else {
-                    ShowMessage(L(@"Уведомления недоступны"), error.localizedDescription ?:
-                        L(@"Разрешите уведомления для Route Shield в системных настройках и включите этот пункт снова."));
-                }
-                [self refreshSettings];
-            });
-        }];
+    RequestIPNotificationAuthorization(^(BOOL granted, NSError *error) {
+        self.requestingNotifications = NO;
+        if (granted) {
+            [settings setBool:YES forKey:NotifyIPChangesKey];
+            [self updateIPMonitoring];
+        } else {
+            ShowNotificationAuthorizationError(error);
+        }
+        [self refreshSettings];
+    });
 }
 
 - (void)toggleForceClose {

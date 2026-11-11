@@ -9,8 +9,10 @@
 Route Shield lives in the menu bar. Add the apps you want to track. To check the connection before opening one, use the Route Shield menu or a Route Shield Dock shortcut. The menu and the prelaunch window show your public IPv4 and IPv6 addresses and the country associated with them.
 
 - **App list.** Drag apps from Finder and Route Shield reads their bundle IDs.
+- **Prelaunch IP check.** Open an app through Route Shield to review your public IPv4 and IPv6 addresses and their countries before it starts.
 - **Dock shortcuts.** Each shortcut uses the original app's icon and opens the IP check window.
-- **IP change notifications.** Choose whether banners show the new IP address, the country, or both. Force-quit for selected apps has its own setting.
+- **IP change notifications.** Choose whether banners show the new IP address, the country, or both.
+- **Force-quit on IP changes.** When enabled, Route Shield requests termination of running apps on your list, including apps you opened directly.
 - **Russian and English.** Change the interface language and login behavior in Settings.
 
 ## Installation
@@ -43,7 +45,7 @@ If your account cannot write to `/Applications`, run `./install.sh --user` to in
 
 ## First run
 
-Choose your language in the welcome window and select **Continue**. Route Shield suggests Russian if Russian is your preferred macOS language and English for all other languages.
+On first launch, choose your language, configure IP change notifications, and decide whether to force-quit apps on your list. Select **Done** to save your preferences and open the Route Shield menu. Route Shield suggests Russian if Russian is your preferred macOS language and English for all other languages.
 
 The screenshots use an example app list and test IP addresses.
 
