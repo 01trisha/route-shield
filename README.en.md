@@ -3,7 +3,7 @@
   <h1>Route Shield</h1>
   <p>Check your public IP before opening apps on macOS.</p>
   <p><a href="README.md">Русский</a> · <strong>English</strong></p>
-  <p><a href="https://github.com/01trisha/route-shield/releases">Download</a> · <a href="#from-source">Install from source</a> · <a href="LICENSE">MIT License</a></p>
+  <p><a href="https://github.com/01trisha/route-shield/releases">Download</a> · <a href="#first-run">First run</a> · <a href="#from-source">Install from source</a> · <a href="LICENSE">MIT License</a></p>
 </div>
 
 Route Shield lives in the menu bar. Choose the apps you want to check, then launch them from the Route Shield menu or a Dock shortcut. The menu and the prelaunch window show your public IPv4 and IPv6 addresses and the country associated with them.
@@ -45,10 +45,29 @@ If your account cannot write to `/Applications`, run `./install.sh --user` to in
 
 Choose your language in the welcome window and select **Continue**. Route Shield suggests Russian if Russian is your preferred macOS language and English for all other languages.
 
-1. Click the Route Shield icon in the menu bar and choose **Add Apps…**. Drag one or more apps from Finder into the drop area at the top of the window. Added apps appear in the grid. Click the red cross on an icon to remove the app from the list.
-2. Open the Route Shield menu again and select Calculator. Wait for the IPv4 and IPv6 checks, then choose **Open** or **Cancel**.
-3. To launch apps from the Dock, choose **Create or Update Dock Shortcuts**. Drag the shortcuts from `~/Applications/Route Shield` into the Dock in place of the original icons.
-4. Click the Route Shield icon and choose **Settings…**. In **General**, choose which connection details appear in the menu and the prelaunch window, change the language, or enable launch at login or force-quit. In **Notifications**, enable notifications, choose what they include, and send a test banner with your current connection details. The **About Us** tab links to the GitHub repository.
+The screenshots use an example app list and test IP addresses.
+
+### Open the Route Shield menu
+
+Click the <img src="assets/screenshots/menu-bar-icon.png" width="26" alt="Route Shield"> icon in the macOS menu bar to see your IPv4 and IPv6 addresses, their countries, and the apps you've added.
+
+<img src="assets/screenshots/en-menu.png" width="250" alt="Route Shield menu showing test IPv4 and IPv6 addresses, countries, and added apps">
+
+### Add apps from Finder
+
+Choose **Add Apps…** and drag one or more apps into the drop area at the top of the window. Click the red cross on an icon to remove that app from the list.
+
+<img src="assets/screenshots/en-add-apps.png" width="550" alt="Add Apps window with a drop area and icons for ChatGPT, Claude, Gemini, and VS Code">
+
+### Check your connection before opening an app
+
+Open the menu again and choose an app such as Claude. Review the IPv4 and IPv6 addresses and their countries, then choose **Open** or **Cancel**.
+
+<img src="assets/screenshots/en-before-opening.png" width="510" alt="Window showing IPv4 and IPv6 addresses and countries before opening Claude">
+
+To launch apps from the Dock, choose **Create or Update Dock Shortcuts**. Drag the shortcuts from `~/Applications/Route Shield` into the Dock in place of the original icons.
+
+Choose **Settings…** from the Route Shield menu. In **General**, choose which connection details appear in the menu and the prelaunch window, change the language, or enable launch at login or force-quit. In **Notifications**, enable notifications, choose what they include, and send a test banner with your current connection details. The **About Us** tab links to the GitHub repository.
 
 The app list lives at `~/Library/Application Support/VPN Guard/.env`. To edit it manually, choose **Settings… → General → Open Configuration File…**. Remove IDs from the `APPS=` line or add new IDs separated by commas. The template comments are in English.
 
