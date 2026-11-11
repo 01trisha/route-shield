@@ -1,4 +1,5 @@
 /build/
+/INFO.md
 .DS_Store
 *.xcuserstate
 xcuserdata/
