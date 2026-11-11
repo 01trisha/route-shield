@@ -41,8 +41,6 @@ The script checks the requirements, builds the app, copies it to `/Applications/
 
 If your account cannot write to `/Applications`, run `./install.sh --user` to install the app in `~/Applications`. Use `--no-open` to install it and open it later.
 
-Before updating, quit Route Shield from its menu. The installer replaces the existing app bundle. Your app list and preferences are stored separately.
-
 ## First run
 
 Choose your language in the welcome window and select **Continue**. Route Shield suggests Russian if Russian is your preferred macOS language and English for all other languages.
@@ -57,6 +55,14 @@ The app list lives at `~/Library/Application Support/VPN Guard/.env`. To edit it
 If you pinned shortcuts from the old `~/Applications/VPN Guard` folder, recreate them and pin the copies from `~/Applications/Route Shield`. New shortcuts use the language selected in Settings.
 
 After updating Route Shield, choose **Create or Update Dock Shortcuts** so that the shortcuts pick up the new code and translations.
+
+## Updates
+
+**Check for Updates…** is at the top of **Settings… → General**. Route Shield also checks the latest stable release on GitHub when it starts if at least a day has passed since the previous check. While Route Shield is running, the check repeats once a day.
+
+When an update is available, a dot appears beside the app icon. The menu links to the release page with DMG and ZIP downloads. If macOS allows Route Shield notifications, it also shows a banner for the new version.
+
+Before installing an update, quit Route Shield from its menu. Replace `Route Shield.app` in **Applications** with the new copy or run the source installer. Your app list and preferences are stored outside the app bundle and carry over.
 
 ## How IP checks work
 
