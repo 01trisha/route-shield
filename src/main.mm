@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <fcntl.h>
 #include <sys/file.h>
+#include <unistd.h>
 
 static NSString *const GuardBundleID = @"local.vpnguard";
 static NSString *const GuardName = @"Route Shield";
@@ -17,13 +18,24 @@ static NSString *const TargetBundleIDKey = @"VPNGuardTargetBundleIdentifier";
 static NSString *const NotifyIPChangesKey = @"NotifyIPChanges";
 static NSString *const ForceCloseOnIPChangeKey = @"ForceCloseOnIPChange";
 static NSString *const LanguageKey = @"InterfaceLanguage";
+static NSString *const WelcomeCompletedKey = @"WelcomeCompleted";
+static NSString *const ShowIPv4Key = @"ShowIPv4";
+static NSString *const ShowIPv6Key = @"ShowIPv6";
+static NSString *const ShowCountryKey = @"ShowCountry";
+static NSString *const NotificationDetailsKey = @"NotificationDetails";
 
-static NSUserDefaults *LanguagePreferences() {
+typedef NS_ENUM(NSInteger, NotificationDetails) {
+    NotificationDetailsAddress,
+    NotificationDetailsCountry,
+    NotificationDetailsAddressAndCountry,
+};
+
+static NSUserDefaults *InterfacePreferences() {
     if (![NSBundle.mainBundle objectForInfoDictionaryKey:TargetBundleIDKey]) {
         return NSUserDefaults.standardUserDefaults;
     }
 
-    // Dock shortcuts have separate bundle IDs and read the main app's preference.
+    // Dock shortcuts have separate bundle IDs and read the main app's preferences.
     static NSUserDefaults *preferences;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
@@ -33,7 +45,17 @@ static NSUserDefaults *LanguagePreferences() {
 }
 
 static BOOL UsesEnglish() {
-    return [[LanguagePreferences() stringForKey:LanguageKey] isEqualToString:@"en"];
+    NSString *saved = [InterfacePreferences() stringForKey:LanguageKey];
+    if (saved) return [saved isEqualToString:@"en"];
+
+    NSString *preferred = NSLocale.preferredLanguages.firstObject ?: @"en";
+    NSString *language = [NSLocale componentsFromLocaleIdentifier:preferred][NSLocaleLanguageCode];
+    return ![language isEqualToString:@"ru"];
+}
+
+static BOOL ShowsConnectionField(NSString *key) {
+    NSUserDefaults *settings = InterfacePreferences();
+    return ![settings objectForKey:key] || [settings boolForKey:key];
 }
 
 static NSString *L(NSString *russian) {
@@ -323,6 +345,22 @@ static void ShowMessage(NSString *title, NSString *detail) {
     [alert runModal];
 }
 
+static NSFileHandle *AcquireMainInstanceLock(int *failure) {
+    NSString *name = [NSBundle.mainBundle.bundleIdentifier stringByAppendingString:@".lock"];
+    NSString *path = [NSTemporaryDirectory() stringByAppendingPathComponent:name];
+    int fd = open(path.fileSystemRepresentation, O_WRONLY | O_CREAT | O_CLOEXEC | O_NOFOLLOW, 0600);
+    if (fd == -1) {
+        *failure = errno;
+        return nil;
+    }
+    if (flock(fd, LOCK_EX | LOCK_NB) == -1) {
+        *failure = errno;
+        close(fd);
+        return nil;
+    }
+    return [[NSFileHandle alloc] initWithFileDescriptor:fd closeOnDealloc:YES];
+}
+
 static NSData *FetchNetworkData(NSString *endpoint, NSArray<NSString *> *options, int *exitStatus) {
     NSTask *curl = [[NSTask alloc] init];
     curl.executableURL = [NSURL fileURLWithPath:@"/usr/bin/curl"];
@@ -452,8 +490,42 @@ static BOOL UpdateKnownAddress(NSString *sample, int family, NSString *__strong 
     return changed;
 }
 
+static NSString *IPNotificationBody(NotificationDetails details, NSString *ipv4, NSString *ipv6, NSString *country) {
+    NSMutableArray<NSString *> *lines = [NSMutableArray array];
+    if (details != NotificationDetailsCountry) {
+        if (ipv4) [lines addObject:[@"IPv4: " stringByAppendingString:ipv4]];
+        if (ipv6) [lines addObject:[@"IPv6: " stringByAppendingString:ipv6]];
+    }
+    if (details != NotificationDetailsAddress && country) [lines addObject:country];
+    return [lines componentsJoinedByString:@"\n"];
+}
+
+static NSView *StackContent(NSArray<NSView *> *controls, CGFloat padding) {
+    NSView *view = [[NSView alloc] initWithFrame:NSZeroRect];
+    NSStackView *stack = [NSStackView stackViewWithViews:controls];
+    stack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    stack.alignment = NSLayoutAttributeLeading;
+    stack.spacing = 12;
+    stack.translatesAutoresizingMaskIntoConstraints = NO;
+    [view addSubview:stack];
+    [NSLayoutConstraint activateConstraints:@[
+        [stack.leadingAnchor constraintEqualToAnchor:view.leadingAnchor constant:padding],
+        [stack.trailingAnchor constraintEqualToAnchor:view.trailingAnchor constant:-padding],
+        [stack.topAnchor constraintEqualToAnchor:view.topAnchor constant:padding],
+        [stack.bottomAnchor constraintLessThanOrEqualToAnchor:view.bottomAnchor constant:-padding]
+    ]];
+    return view;
+}
+
+static NSTabViewItem *SettingsTab(NSString *identifier, NSString *title, NSArray<NSView *> *controls) {
+    NSTabViewItem *tab = [[NSTabViewItem alloc] initWithIdentifier:identifier];
+    tab.label = title;
+    tab.view = StackContent(controls, 20);
+    return tab;
+}
+
 @interface IPMonitor : NSObject
-- (instancetype)initWithHandler:(void (^)(NSArray<NSString *> *))handler;
+- (instancetype)initWithHandler:(void (^)(NSString *, NSString *))handler;
 - (void)checkWithResult:(void (^)(NSString *, NSString *))result;
 - (void)stop;
 - (void)networkChanged;
@@ -466,7 +538,7 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
 }
 
 @implementation IPMonitor {
-    void (^_handler)(NSArray<NSString *> *);
+    void (^_handler)(NSString *, NSString *);
     void (^_showResult)(NSString *, NSString *);
     SCDynamicStoreRef _store;
     CFRunLoopSourceRef _source;
@@ -481,7 +553,7 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     BOOL _checkAgain;
 }
 
-- (instancetype)initWithHandler:(void (^)(NSArray<NSString *> *))handler {
+- (instancetype)initWithHandler:(void (^)(NSString *, NSString *))handler {
     self = [super init];
     if (!self) return nil;
     _handler = [handler copy];
@@ -580,14 +652,9 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
         if (!monitor || !monitor->_handler) return;
         monitor->_checking = NO;
         if (revision == monitor->_networkRevision) {
-            NSMutableArray<NSString *> *changed = [NSMutableArray array];
-            if (UpdateKnownAddress(ipv4, AF_INET, &monitor->_lastIPv4)) {
-                [changed addObject:[@"IPv4   " stringByAppendingString:ipv4]];
-            }
-            if (UpdateKnownAddress(ipv6, AF_INET6, &monitor->_lastIPv6)) {
-                [changed addObject:[@"IPv6   " stringByAppendingString:ipv6]];
-            }
-            if (changed.count) monitor->_handler(changed);
+            BOOL changed4 = UpdateKnownAddress(ipv4, AF_INET, &monitor->_lastIPv4);
+            BOOL changed6 = UpdateKnownAddress(ipv6, AF_INET6, &monitor->_lastIPv6);
+            if (changed4 || changed6) monitor->_handler(changed4 ? ipv4 : nil, changed6 ? ipv6 : nil);
             void (^showResult)(NSString *, NSString *) = monitor->_showResult;
             monitor->_showResult = nil;
             if (showResult) showResult(ipv4, ipv6);
@@ -603,12 +670,15 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
 @property (strong) NSStatusItem *statusItem;
 @property (strong) NSPanel *addPanel;
 @property (strong) NSWindow *settingsWindow;
+@property (strong) NSTabView *settingsTabs;
+@property (strong) NSWindow *welcomeWindow;
 @property (strong) NSBox *dropBox;
 @property (strong) NSTextField *dropStatus;
 @property (strong) NSWindow *prompt;
 @property (strong) NSTextField *ipv4;
 @property (strong) NSTextField *ipv6;
 @property (strong) NSTextField *country;
+@property (strong) NSTextField *promptHelp;
 @property NSUInteger promptCheckRevision;
 @property (strong) NSButton *refreshButton;
 @property (strong) NSButton *openButton;
@@ -617,6 +687,7 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
 @property BOOL requestingNotifications;
 @property (strong) IPMonitor *ipMonitor;
 @property (copy) NSString *lastIPEvent;
+@property (strong) NSMutableSet<NSNumber *> *closingPIDs;
 @end
 
 @implementation GuardApp
@@ -635,7 +706,21 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
         [self askToOpen:self.shortcutTarget];
         return;
     }
+    NSUserDefaults *settings = InterfacePreferences();
+    if (![settings objectForKey:WelcomeCompletedKey]) {
+        BOOL hasPreviousSetup = [settings objectForKey:LanguageKey] ||
+            [settings objectForKey:NotifyIPChangesKey] || [settings objectForKey:ForceCloseOnIPChangeKey] ||
+            [NSFileManager.defaultManager fileExistsAtPath:ConfigURL().path];
+        [settings setBool:hasPreviousSetup forKey:WelcomeCompletedKey];
+    }
+    if ([settings boolForKey:WelcomeCompletedKey]) {
+        [self startMenuBar];
+    } else {
+        [self showWelcome];
+    }
+}
 
+- (void)startMenuBar {
     self.statusItem = [NSStatusBar.systemStatusBar statusItemWithLength:NSVariableStatusItemLength];
     self.statusItem.button.image = [NSImage imageWithSystemSymbolName:@"shield" accessibilityDescription:GuardName];
     self.statusItem.button.toolTip = GuardName;
@@ -654,10 +739,14 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
 
 - (void)menuNeedsUpdate:(NSMenu *)menu {
     [menu removeAllItems];
-    [self addItem:L(@"Текущее соединение") action:nullptr toMenu:menu];
-    NSMenuItem *ipv4Item = [self addItem:L(@"IPv4   Проверяю…") action:nullptr toMenu:menu];
-    NSMenuItem *ipv6Item = [self addItem:L(@"IPv6   Проверяю…") action:nullptr toMenu:menu];
-    NSMenuItem *countryItem = [self addItem:CountryLine(L(@"Определяю…")) action:nullptr toMenu:menu];
+    BOOL showIPv4 = ShowsConnectionField(ShowIPv4Key);
+    BOOL showIPv6 = ShowsConnectionField(ShowIPv6Key);
+    BOOL showCountry = ShowsConnectionField(ShowCountryKey);
+    BOOL showConnection = showIPv4 || showIPv6 || showCountry;
+    if (showConnection) [self addItem:L(@"Текущее соединение") action:nullptr toMenu:menu];
+    NSMenuItem *ipv4Item = showIPv4 ? [self addItem:L(@"IPv4   Проверяю…") action:nullptr toMenu:menu] : nil;
+    NSMenuItem *ipv6Item = showIPv6 ? [self addItem:L(@"IPv6   Проверяю…") action:nullptr toMenu:menu] : nil;
+    NSMenuItem *countryItem = showCountry ? [self addItem:CountryLine(L(@"Определяю…")) action:nullptr toMenu:menu] : nil;
     NSMenuItem *monitorItem = nil;
     if (self.ipMonitor) {
         monitorItem = [self addItem:self.lastIPEvent ?: L(@"Мониторинг включён · смена IP ещё не обнаружена")
@@ -668,14 +757,16 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
         ipv4Item.title = [@"IPv4   " stringByAppendingString:ipv4];
         ipv6Item.title = [@"IPv6   " stringByAppendingString:ipv6];
         monitorItem.title = weakSelf.lastIPEvent ?: L(@"Мониторинг включён · смена IP ещё не обнаружена");
-        CheckCountries(ipv4, ipv6, ^(NSString *country) { countryItem.title = country; });
+        if (countryItem.menu) {
+            CheckCountries(ipv4, ipv6, ^(NSString *country) { countryItem.title = country; });
+        }
     };
     if (self.ipMonitor) {
         [self.ipMonitor checkWithResult:display];
-    } else {
+    } else if (showConnection) {
         CheckIPs(display);
     }
-    [menu addItem:NSMenuItem.separatorItem];
+    if (showConnection || monitorItem) [menu addItem:NSMenuItem.separatorItem];
 
     NSString *problem = nil;
     NSArray<NSString *> *identifiers = ReadApps(&problem);
@@ -699,9 +790,54 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     [self addItem:[L(@"Выйти из ") stringByAppendingString:GuardName] action:@selector(quit) toMenu:menu];
 }
 
+- (NSStackView *)languageRow {
+    NSPopUpButton *languages = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+    [languages addItemsWithTitles:@[@"Русский", @"English"]];
+    [languages selectItemAtIndex:UsesEnglish() ? 1 : 0];
+    languages.target = self;
+    languages.action = @selector(changeLanguage:);
+    [languages setAccessibilityLabel:L(@"Язык интерфейса")];
+    NSStackView *row = [NSStackView stackViewWithViews:
+        @[[NSTextField labelWithString:L(@"Язык интерфейса")], languages]];
+    row.spacing = 12;
+    return row;
+}
+
+- (void)showWelcome {
+    if (!self.welcomeWindow) {
+        self.welcomeWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 480, 235)
+            styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable backing:NSBackingStoreBuffered defer:NO];
+        self.welcomeWindow.releasedWhenClosed = NO;
+        self.welcomeWindow.delegate = self;
+        [self.welcomeWindow center];
+    }
+    self.welcomeWindow.title = GuardName;
+    NSTextField *heading = [NSTextField labelWithString:L(@"Добро пожаловать в Route Shield")];
+    heading.font = [NSFont boldSystemFontOfSize:21];
+    NSTextField *intro = [NSTextField wrappingLabelWithString:
+        L(@"Route Shield показывает внешний IP в строке меню и перед запуском выбранных приложений. При смене IP он может уведомить вас и завершить эти приложения.")];
+    intro.preferredMaxLayoutWidth = 432;
+    NSButton *proceed = [NSButton buttonWithTitle:L(@"Продолжить") target:self action:@selector(continueWelcome)];
+    proceed.keyEquivalent = @"\r";
+    self.welcomeWindow.contentView = StackContent(@[heading, intro, [self languageRow], proceed], 24);
+    [NSApp activateIgnoringOtherApps:YES];
+    [self.welcomeWindow makeKeyAndOrderFront:nil];
+}
+
+- (void)continueWelcome {
+    NSUserDefaults *settings = InterfacePreferences();
+    [settings setObject:UsesEnglish() ? @"en" : @"ru" forKey:LanguageKey];
+    [settings setBool:YES forKey:WelcomeCompletedKey];
+    NSWindow *window = self.welcomeWindow;
+    self.welcomeWindow = nil;
+    [window close];
+    [self startMenuBar];
+    dispatch_async(dispatch_get_main_queue(), ^{ [self.statusItem.button performClick:nil]; });
+}
+
 - (void)showSettings {
     if (!self.settingsWindow) {
-        self.settingsWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 520, 340)
+        self.settingsWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 530, 390)
             styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable backing:NSBackingStoreBuffered defer:NO];
         self.settingsWindow.releasedWhenClosed = NO;
         [self.settingsWindow center];
@@ -711,82 +847,104 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     [self.settingsWindow makeKeyAndOrderFront:nil];
 }
 
-- (void)refreshSettings {
-    if (!self.settingsWindow) return;
-    self.settingsWindow.title = L(@"Настройки Route Shield");
-    NSUserDefaults *settings = NSUserDefaults.standardUserDefaults;
+- (NSButton *)connectionCheckbox:(NSString *)title key:(NSString *)key {
+    NSButton *button = [NSButton checkboxWithTitle:title target:self action:@selector(changeConnectionField:)];
+    button.identifier = key;
+    button.state = ShowsConnectionField(key) ? NSControlStateValueOn : NSControlStateValueOff;
+    return button;
+}
 
-    NSPopUpButton *languages = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
-    [languages addItemsWithTitles:@[@"Русский", @"English"]];
-    [languages selectItemAtIndex:UsesEnglish() ? 1 : 0];
-    languages.target = self;
-    languages.action = @selector(changeLanguage:);
-    [languages setAccessibilityLabel:L(@"Язык интерфейса")];
-    NSStackView *languageRow = [NSStackView stackViewWithViews:
-        @[[NSTextField labelWithString:L(@"Язык интерфейса")], languages]];
-    languageRow.spacing = 12;
-
-    NSButton *notify = [NSButton checkboxWithTitle:L(@"Уведомлять при смене IP")
-        target:self action:@selector(toggleIPNotifications)];
-    notify.state = [settings boolForKey:NotifyIPChangesKey] ? NSControlStateValueOn : NSControlStateValueOff;
-    notify.enabled = !self.requestingNotifications;
-    NSButton *test = [NSButton buttonWithTitle:L(@"Проверить уведомление")
-        target:self action:@selector(testIPNotification)];
-    test.enabled = notify.state == NSControlStateValueOn;
+- (NSArray<NSView *> *)generalControls {
+    NSTextField *connection = [NSTextField labelWithString:L(@"Информация о соединении")];
+    connection.font = [NSFont boldSystemFontOfSize:NSFont.systemFontSize];
     NSButton *forceClose = [NSButton checkboxWithTitle:L(@"Принудительно закрывать приложения при смене IP")
         target:self action:@selector(toggleForceClose)];
-    forceClose.state = [settings boolForKey:ForceCloseOnIPChangeKey] ? NSControlStateValueOn : NSControlStateValueOff;
-    NSTextField *detail = [NSTextField wrappingLabelWithString:L(@"Несохранённые данные могут потеряться.")];
+    forceClose.state = [NSUserDefaults.standardUserDefaults boolForKey:ForceCloseOnIPChangeKey]
+        ? NSControlStateValueOn : NSControlStateValueOff;
+    NSTextField *detail = [NSTextField labelWithString:L(@"Несохранённые данные могут потеряться.")];
     detail.textColor = NSColor.secondaryLabelColor;
     SMAppServiceStatus status = SMAppService.mainAppService.status;
     NSButton *login = [NSButton checkboxWithTitle:L(@"Запускать при входе")
         target:self action:@selector(toggleLogin)];
     login.state = status == SMAppServiceStatusEnabled ? NSControlStateValueOn : NSControlStateValueOff;
-    NSStackView *stack = [NSStackView stackViewWithViews:@[languageRow, notify, test, forceClose, detail, login]];
+    NSMutableArray<NSView *> *controls = [@[
+        [self languageRow], connection,
+        [self connectionCheckbox:L(@"Показывать IPv4") key:ShowIPv4Key],
+        [self connectionCheckbox:L(@"Показывать IPv6") key:ShowIPv6Key],
+        [self connectionCheckbox:L(@"Показывать страну") key:ShowCountryKey],
+        login, forceClose, detail
+    ] mutableCopy];
     if (status == SMAppServiceStatusRequiresApproval) {
         login.enabled = NO;
-        [stack addArrangedSubview:[NSButton buttonWithTitle:L(@"Разрешить запуск при входе…")
-            target:self action:@selector(toggleLogin)]];
+        [controls insertObject:[NSButton buttonWithTitle:L(@"Разрешить запуск при входе…")
+            target:self action:@selector(toggleLogin)] atIndex:6];
     }
-    NSButton *about = [NSButton buttonWithTitle:L(@"О нас") target:self action:@selector(openRepository)];
+    return controls;
+}
+
+- (NSArray<NSView *> *)notificationControls {
+    NSUserDefaults *settings = NSUserDefaults.standardUserDefaults;
+    BOOL enabled = [settings boolForKey:NotifyIPChangesKey];
+    NSButton *notify = [NSButton checkboxWithTitle:L(@"Уведомлять при смене IP")
+        target:self action:@selector(toggleIPNotifications)];
+    notify.state = enabled ? NSControlStateValueOn : NSControlStateValueOff;
+    notify.enabled = !self.requestingNotifications;
+    NSPopUpButton *details = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+    [details addItemsWithTitles:@[L(@"IP-адрес"), L(@"Страна"), L(@"IP-адрес и страна")]];
+    [details selectItemAtIndex:[settings integerForKey:NotificationDetailsKey]];
+    details.target = self;
+    details.action = @selector(changeNotificationDetails:);
+    [details setAccessibilityLabel:L(@"Содержимое уведомления")];
+    NSStackView *row = [NSStackView stackViewWithViews:
+        @[[NSTextField labelWithString:L(@"Содержимое уведомления")], details]];
+    row.spacing = 12;
+    NSButton *test = [NSButton buttonWithTitle:L(@"Проверить уведомление")
+        target:self action:@selector(testIPNotification)];
+    test.enabled = enabled;
+    return @[notify, row, test];
+}
+
+- (void)refreshSettings {
+    if (!self.settingsWindow) return;
+    self.settingsWindow.title = L(@"Настройки Route Shield");
+    NSString *selected = self.settingsTabs.selectedTabViewItem.identifier;
+    NSTabView *tabs = [[NSTabView alloc] initWithFrame:self.settingsWindow.contentView.bounds];
+    [tabs addTabViewItem:SettingsTab(@"general", L(@"Основные"), [self generalControls])];
+    [tabs addTabViewItem:SettingsTab(@"notifications", L(@"Уведомления"), [self notificationControls])];
+    NSButton *about = [NSButton buttonWithTitle:L(@"Репозиторий на GitHub") target:self action:@selector(openRepository)];
     about.bordered = NO;
     about.attributedTitle = [[NSAttributedString alloc] initWithString:about.title attributes:@{
         NSFontAttributeName: about.font ?: [NSFont systemFontOfSize:NSFont.systemFontSize],
         NSForegroundColorAttributeName: NSColor.linkColor,
         NSUnderlineStyleAttributeName: @(NSUnderlineStyleSingle)
     }];
-    [stack addArrangedSubview:about];
-    stack.orientation = NSUserInterfaceLayoutOrientationVertical;
-    stack.alignment = NSLayoutAttributeLeading;
-    stack.spacing = 12;
-    [stack setCustomSpacing:22 afterView:languageRow];
-    [stack setCustomSpacing:6 afterView:forceClose];
-    [stack setCustomSpacing:18 afterView:detail];
-    stack.translatesAutoresizingMaskIntoConstraints = NO;
-
-    NSView *view = [[NSView alloc] initWithFrame:self.settingsWindow.contentView.bounds];
-    self.settingsWindow.contentView = view;
-    [view addSubview:stack];
-    [NSLayoutConstraint activateConstraints:@[
-        [stack.leadingAnchor constraintEqualToAnchor:view.leadingAnchor constant:24],
-        [stack.trailingAnchor constraintEqualToAnchor:view.trailingAnchor constant:-24],
-        [stack.topAnchor constraintEqualToAnchor:view.topAnchor constant:22],
-        [stack.bottomAnchor constraintLessThanOrEqualToAnchor:view.bottomAnchor constant:-16],
-        [detail.widthAnchor constraintLessThanOrEqualToAnchor:stack.widthAnchor]
-    ]];
+    [tabs addTabViewItem:SettingsTab(@"about", L(@"О нас"), @[[NSTextField labelWithString:GuardName], about])];
+    if (selected) [tabs selectTabViewItemWithIdentifier:selected];
+    self.settingsTabs = tabs;
+    self.settingsWindow.contentView = tabs;
 }
 
 - (void)openRepository {
     [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:RepositoryURL]];
 }
 
+- (void)changeConnectionField:(NSButton *)sender {
+    [InterfacePreferences() setBool:sender.state == NSControlStateValueOn forKey:sender.identifier];
+    if (self.prompt) [self refreshIPs];
+}
+
+- (void)changeNotificationDetails:(NSPopUpButton *)sender {
+    [NSUserDefaults.standardUserDefaults setInteger:sender.indexOfSelectedItem forKey:NotificationDetailsKey];
+}
+
 - (void)changeLanguage:(NSPopUpButton *)sender {
-    [LanguagePreferences() setObject:sender.indexOfSelectedItem == 1 ? @"en" : @"ru" forKey:LanguageKey];
+    [InterfacePreferences() setObject:sender.indexOfSelectedItem == 1 ? @"en" : @"ru" forKey:LanguageKey];
     self.lastIPEvent = nil;
     [self.addPanel close];
     self.addPanel = nil;
     self.dropBox = nil;
     self.dropStatus = nil;
+    if (self.welcomeWindow) [self showWelcome];
     [self refreshSettings];
 }
 
@@ -916,8 +1074,8 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
         self.lastIPEvent = nil;
     } else if (!self.ipMonitor) {
         __weak GuardApp *weakSelf = self;
-        self.ipMonitor = [[IPMonitor alloc] initWithHandler:^(NSArray<NSString *> *changed) {
-            [weakSelf handleIPChange:changed];
+        self.ipMonitor = [[IPMonitor alloc] initWithHandler:^(NSString *ipv4, NSString *ipv6) {
+            [weakSelf handleIPChangeWithIPv4:ipv4 ipv6:ipv6];
         }];
     }
 }
@@ -971,29 +1129,93 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     [self refreshSettings];
 }
 
-- (void)handleIPChange:(NSArray<NSString *> *)changed {
+- (void)closeTrackedAppsWithCompletion:(void (^)(NSArray<NSString *> *))completion {
+    NSString *problem = nil;
+    NSUInteger running = 0;
+    NSMutableArray<NSRunningApplication *> *pending = [NSMutableArray array];
+    NSMutableDictionary<NSNumber *, NSString *> *names = [NSMutableDictionary dictionary];
+    if (!self.closingPIDs) self.closingPIDs = [NSMutableSet set];
+    for (NSString *identifier in ReadApps(&problem)) {
+        for (NSRunningApplication *app in [NSRunningApplication runningApplicationsWithBundleIdentifier:identifier]) {
+            NSNumber *pid = @(app.processIdentifier);
+            if (app.terminated || [self.closingPIDs containsObject:pid]) continue;
+            running++;
+            NSString *name = app.localizedName ?: identifier;
+            if (![app forceTerminate]) continue;
+            [self.closingPIDs addObject:pid];
+            [pending addObject:app];
+            names[pid] = name;
+        }
+    }
+    self.lastIPEvent = problem ? [self.lastIPEvent stringByAppendingString:L(@" · ошибка в .env")] :
+        [self.lastIPEvent stringByAppendingFormat:L(@" · запросов на закрытие %lu из %lu"),
+            (unsigned long)pending.count, (unsigned long)running];
+    if (pending.count == 0) {
+        completion(@[]);
+        return;
+    }
+
+    NSMutableOrderedSet<NSString *> *closed = [NSMutableOrderedSet orderedSet];
+    NSTimeInterval deadline = NSProcessInfo.processInfo.systemUptime + 5;
+    NSTimer *confirmation = [NSTimer timerWithTimeInterval:0.2 repeats:YES block:^(NSTimer *timer) {
+        BOOL expired = NSProcessInfo.processInfo.systemUptime >= deadline;
+        for (NSRunningApplication *app in [pending copy]) {
+            BOOL terminated = app.terminated;
+            if (!terminated && !expired) continue;
+            NSNumber *pid = @(app.processIdentifier);
+            if (terminated) [closed addObject:names[pid]];
+            [self.closingPIDs removeObject:pid];
+            [pending removeObjectIdenticalTo:app];
+        }
+        if (pending.count) return;
+        [timer invalidate];
+        completion([closed.array sortedArrayUsingSelector:@selector(localizedStandardCompare:)]);
+    }];
+    [NSRunLoop.mainRunLoop addTimer:confirmation forMode:NSRunLoopCommonModes];
+}
+
+- (void)handleIPChangeWithIPv4:(NSString *)ipv4 ipv6:(NSString *)ipv6 {
     NSUserDefaults *settings = NSUserDefaults.standardUserDefaults;
     NSString *time = [NSDateFormatter localizedStringFromDate:NSDate.date
         dateStyle:NSDateFormatterNoStyle timeStyle:NSDateFormatterMediumStyle];
     self.lastIPEvent = [L(@"Смена IP · ") stringByAppendingString:time];
-    if ([settings boolForKey:ForceCloseOnIPChangeKey]) {
-        NSString *problem = nil;
-        NSUInteger running = 0;
-        NSUInteger requested = 0;
-        for (NSString *identifier in ReadApps(&problem)) {
-            for (NSRunningApplication *app in [NSRunningApplication runningApplicationsWithBundleIdentifier:identifier]) {
-                if (app.terminated) continue;
-                running++;
-                if ([app forceTerminate]) requested++;
+    BOOL notify = [settings boolForKey:NotifyIPChangesKey];
+    dispatch_group_t event = dispatch_group_create();
+    __block NSArray<NSString *> *closed = nil;
+    if (notify) {
+        NotificationDetails details = (NotificationDetails)[settings integerForKey:NotificationDetailsKey];
+        dispatch_group_enter(event);
+        void (^postChange)(NSString *) = ^(NSString *country) {
+            if (![settings boolForKey:NotifyIPChangesKey]) {
+                dispatch_group_leave(event);
+                return;
             }
+            [self postIPNotification:L(@"Внешний IP изменился")
+                body:IPNotificationBody(details, ipv4, ipv6, country) completion:^(NSError *error) {
+                    (void)error;
+                    dispatch_group_leave(event);
+                }];
+        };
+        if (details == NotificationDetailsCountry || details == NotificationDetailsAddressAndCountry) {
+            CheckCountries(ipv4, ipv6, postChange);
+        } else {
+            postChange(nil);
         }
-        self.lastIPEvent = problem ? [self.lastIPEvent stringByAppendingString:L(@" · ошибка в .env")] :
-            [self.lastIPEvent stringByAppendingFormat:L(@" · запросов на закрытие %lu из %lu"),
-                (unsigned long)requested, (unsigned long)running];
     }
-    if ([settings boolForKey:NotifyIPChangesKey]) {
-        [self postIPNotification:L(@"Внешний IP изменился") body:[changed componentsJoinedByString:@"\n"]
-            completion:nil];
+    if ([settings boolForKey:ForceCloseOnIPChangeKey]) {
+        dispatch_group_enter(event);
+        [self closeTrackedAppsWithCompletion:^(NSArray<NSString *> *names) {
+            closed = names;
+            dispatch_group_leave(event);
+        }];
+    }
+    if (notify) {
+        dispatch_group_notify(event, dispatch_get_main_queue(), ^{
+            if (closed.count && [settings boolForKey:NotifyIPChangesKey]) {
+                [self postIPNotification:L(@"Приложения закрыты после смены IP")
+                    body:[closed componentsJoinedByString:@"\n"] completion:nil];
+            }
+        });
     }
 }
 
@@ -1007,7 +1229,10 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
 }
 
 - (void)testIPNotification {
-    [self postIPNotification:[GuardName stringByAppendingString:L(@" · проверка")] body:L(@"Уведомление о смене IP будет выглядеть так.")
+    NotificationDetails details = (NotificationDetails)[NSUserDefaults.standardUserDefaults integerForKey:NotificationDetailsKey];
+    NSString *country = details == NotificationDetailsAddress ? nil : CountrySummary(@"DE", nil, YES, NO);
+    [self postIPNotification:[GuardName stringByAppendingString:L(@" · проверка")]
+        body:IPNotificationBody(details, @"203.0.113.42", nil, country)
         completion:^(NSError *error) {
             if (!error) return;
             dispatch_async(dispatch_get_main_queue(), ^{
@@ -1103,11 +1328,13 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     NSTextField *heading = [NSTextField wrappingLabelWithString:
         [NSString stringWithFormat:L(@"Открыть «%@»?"), AppName(url)]];
     heading.font = [NSFont boldSystemFontOfSize:19];
-    NSTextField *help = [NSTextField wrappingLabelWithString:
+    self.promptHelp = [NSTextField wrappingLabelWithString:
         L(@"Сверьте внешние адреса с адресами VPN перед запуском.")];
+    self.promptHelp.preferredMaxLayoutWidth = 462;
     self.ipv4 = [NSTextField labelWithString:@""];
     self.ipv6 = [NSTextField labelWithString:@""];
     self.country = [NSTextField wrappingLabelWithString:@""];
+    self.country.preferredMaxLayoutWidth = 462;
     self.country.selectable = YES;
     for (NSTextField *label in @[self.ipv4, self.ipv6]) {
         label.font = [NSFont monospacedSystemFontOfSize:13 weight:NSFontWeightRegular];
@@ -1121,7 +1348,8 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     NSStackView *buttons = [NSStackView stackViewWithViews:@[self.refreshButton, cancel, self.openButton]];
     buttons.spacing = 9;
 
-    NSStackView *stack = [NSStackView stackViewWithViews:@[heading, help, self.ipv4, self.ipv6, self.country, buttons]];
+    NSStackView *stack = [NSStackView stackViewWithViews:
+        @[heading, self.promptHelp, self.ipv4, self.ipv6, self.country, buttons]];
     stack.orientation = NSUserInterfaceLayoutOrientationVertical;
     stack.alignment = NSLayoutAttributeLeading;
     stack.spacing = 12;
@@ -1133,10 +1361,8 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
         [stack.leadingAnchor constraintEqualToAnchor:view.leadingAnchor constant:24],
         [stack.trailingAnchor constraintEqualToAnchor:view.trailingAnchor constant:-24],
         [stack.topAnchor constraintEqualToAnchor:view.topAnchor constant:22],
-        [stack.bottomAnchor constraintEqualToAnchor:view.bottomAnchor constant:-22],
-        [heading.widthAnchor constraintLessThanOrEqualToAnchor:stack.widthAnchor],
-        [help.widthAnchor constraintEqualToAnchor:stack.widthAnchor],
-        [self.country.widthAnchor constraintEqualToAnchor:stack.widthAnchor]
+        [stack.bottomAnchor constraintLessThanOrEqualToAnchor:view.bottomAnchor constant:-22],
+        [heading.widthAnchor constraintLessThanOrEqualToAnchor:stack.widthAnchor]
     ]];
 
     [self refreshIPs];
@@ -1149,10 +1375,18 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
 - (void)refreshIPs {
     NSWindow *prompt = self.prompt;
     NSUInteger revision = ++self.promptCheckRevision;
+    self.ipv4.hidden = !ShowsConnectionField(ShowIPv4Key);
+    self.ipv6.hidden = !ShowsConnectionField(ShowIPv6Key);
+    self.country.hidden = !ShowsConnectionField(ShowCountryKey);
+    BOOL showConnection = !self.ipv4.hidden || !self.ipv6.hidden || !self.country.hidden;
+    self.promptHelp.hidden = !showConnection;
+    self.refreshButton.hidden = !showConnection;
+    self.openButton.enabled = !showConnection;
+    if (!showConnection) return;
+
     self.ipv4.stringValue = L(@"IPv4   Проверяю…");
     self.ipv6.stringValue = L(@"IPv6   Проверяю…");
     self.country.stringValue = CountryLine(L(@"Определяю…"));
-    self.openButton.enabled = NO;
     self.refreshButton.enabled = NO;
     CheckIPs(^(NSString *ipv4, NSString *ipv6) {
         if (self.prompt != prompt || self.promptCheckRevision != revision) return;
@@ -1160,11 +1394,13 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
         self.ipv6.stringValue = [@"IPv6   " stringByAppendingString:ipv6];
         self.refreshButton.enabled = YES;
         self.openButton.enabled = YES;
-        CheckCountries(ipv4, ipv6, ^(NSString *country) {
-            if (self.prompt == prompt && self.promptCheckRevision == revision) {
-                self.country.stringValue = country;
-            }
-        });
+        if (!self.country.hidden) {
+            CheckCountries(ipv4, ipv6, ^(NSString *country) {
+                if (self.prompt == prompt && self.promptCheckRevision == revision) {
+                    self.country.stringValue = country;
+                }
+            });
+        }
     });
 }
 
@@ -1173,6 +1409,11 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
 }
 
 - (void)windowWillClose:(NSNotification *)notification {
+    if (notification.object == self.welcomeWindow) {
+        self.welcomeWindow = nil;
+        [self quit];
+        return;
+    }
     if (notification.object != self.prompt) return;
     self.prompt = nil;
     self.pendingTarget = nil;
@@ -1253,6 +1494,18 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
 
 int main() {
     @autoreleasepool {
+        __attribute__((objc_precise_lifetime)) NSFileHandle *mainLock = nil;
+        if (![NSBundle.mainBundle objectForInfoDictionaryKey:TargetBundleIDKey]) {
+            int failure = 0;
+            mainLock = AcquireMainInstanceLock(&failure);
+            if (!mainLock) {
+                if (failure == EWOULDBLOCK) return 0;
+                (void)NSApplication.sharedApplication;
+                ShowMessage(L(@"Не удалось запустить Route Shield"),
+                    [NSError errorWithDomain:NSPOSIXErrorDomain code:failure userInfo:nil].localizedDescription);
+                return 1;
+            }
+        }
         NSApplication *app = NSApplication.sharedApplication;
         [app setActivationPolicy:NSApplicationActivationPolicyAccessory];
         __attribute__((objc_precise_lifetime)) GuardApp *delegate = [[GuardApp alloc] init];
