@@ -3,14 +3,14 @@
   <h1>Route Shield</h1>
   <p>Check your public IP before opening apps on macOS.</p>
   <p><a href="README.md">Русский</a> · <strong>English</strong></p>
-  <p><a href="https://github.com/01trisha/route-shield/releases">Download</a> · <a href="#first-run">First run</a> · <a href="#from-source">Install from source</a> · <a href="LICENSE">MIT License</a></p>
+  <p><a href="https://github.com/01trisha/route-shield/releases">Download</a> · <a href="#first-run">First run</a> · <a href="#ip-change-notifications">Notifications</a> · <a href="#from-source">Install from source</a> · <a href="LICENSE">MIT License</a></p>
 </div>
 
 Route Shield lives in the menu bar. Add the apps you want to track. To check the connection before opening one, use the Route Shield menu or a Route Shield Dock shortcut. The menu and the prelaunch window show your public IPv4 and IPv6 addresses and the country associated with them.
 
 - **App list.** Drag apps from Finder and Route Shield reads their bundle IDs.
 - **Dock shortcuts.** Each shortcut uses the original app's icon and opens the IP check window.
-- **IP monitoring.** Enable notifications and force-quitting selected apps when your IP changes. The two settings work independently.
+- **IP change notifications.** Choose whether banners show the new IP address, the country, or both. Force-quit for selected apps has its own setting.
 - **Russian and English.** Change the interface language and login behavior in Settings.
 
 ## Installation
@@ -69,13 +69,21 @@ You can also open tracked apps as usual from Finder, Spotlight, or their origina
 
 To see the prelaunch window when opening apps from the Dock, choose **Create or Update Dock Shortcuts**. Drag the shortcuts from `~/Applications/Route Shield` into the Dock in place of the original icons.
 
-Choose **Settings…** from the Route Shield menu. In **General**, choose which connection details appear in the menu and the prelaunch window, change the language, or enable launch at login or force-quit. In **Notifications**, enable notifications, choose what they include, and send a test banner with your current connection details. The **About Us** tab links to the GitHub repository.
+Choose **Settings…** from the Route Shield menu. In **General**, choose which connection details appear in the menu and the prelaunch window, change the language, or enable launch at login or force-quit. The **About Us** tab links to the GitHub repository.
 
 The app list lives at `~/Library/Application Support/VPN Guard/.env`. To edit it manually, choose **Settings… → General → Open Configuration File…**. Remove IDs from the `APPS=` line or add new IDs separated by commas. The template comments are in English.
 
 If you pinned shortcuts from the old `~/Applications/VPN Guard` folder, recreate them and pin the copies from `~/Applications/Route Shield`. New shortcuts use the language selected in Settings.
 
 After updating Route Shield, choose **Create or Update Dock Shortcuts** so that the shortcuts pick up the new code and translations.
+
+## IP change notifications
+
+Route Shield sends a macOS notification when it detects a change to your public IPv4 or IPv6 address. To receive banners, go to **Settings… → Notifications**, turn on **Notify when the IP changes**, and allow notifications in macOS.
+
+Under **Notification details**, choose **IP address**, **Country**, or **IP address and country**. Select **Test Notification** to see a sample banner with your current connection details.
+
+If force-quit is enabled and Route Shield closes apps after an IP change, a separate notification lists the apps that were closed.
 
 ## Updates
 
@@ -93,9 +101,7 @@ Route Shield sends the detected public IP addresses to Country.is to estimate th
 
 When monitoring is enabled, Route Shield checks after macOS network events and after wake. The fallback check runs about every 15 seconds while force-quit is enabled and a tracked app is running. Otherwise it runs about every two minutes. The first successful result establishes a baseline for each address family. A failed request by itself does not count as an IP change.
 
-As soon as either IPv4 or IPv6 confirms a change, Route Shield requests termination of tracked apps if force-quit is enabled. It then sends one notification with the changed addresses, countries, or both. If apps were closed, a second notification lists them.
-
-**Force-quit works regardless of how you opened an app.** If enabled, Route Shield requests termination of all running apps on the list when it detects an IP change. An app can still access the network before detection, and force-quitting can discard unsaved changes.
+**Force-quit works regardless of how you opened an app.** If enabled, Route Shield requests termination of all running apps on the list as soon as it detects a change to IPv4 or IPv6. An app can still access the network before detection, and force-quitting can discard unsaved changes.
 
 ## Build and package
 
