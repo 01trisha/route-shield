@@ -12,12 +12,18 @@
 
 static NSString *const GuardBundleID = @"local.vpnguard";
 static NSString *const GuardName = @"Route Shield";
+static NSString *const RepositoryURL = @"https://github.com/01trisha/route-shield";
 static NSString *const TargetBundleIDKey = @"VPNGuardTargetBundleIdentifier";
 static NSString *const NotifyIPChangesKey = @"NotifyIPChanges";
 static NSString *const ForceCloseOnIPChangeKey = @"ForceCloseOnIPChange";
 static NSString *const LanguageKey = @"InterfaceLanguage";
 
 static NSUserDefaults *LanguagePreferences() {
+    if (![NSBundle.mainBundle objectForInfoDictionaryKey:TargetBundleIDKey]) {
+        return NSUserDefaults.standardUserDefaults;
+    }
+
+    // Dock shortcuts have separate bundle IDs and read the main app's preference.
     static NSUserDefaults *preferences;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
@@ -611,7 +617,7 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
 
 - (void)showSettings {
     if (!self.settingsWindow) {
-        self.settingsWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 520, 300)
+        self.settingsWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 520, 340)
             styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable backing:NSBackingStoreBuffered defer:NO];
         self.settingsWindow.releasedWhenClosed = NO;
         [self.settingsWindow center];
@@ -658,6 +664,14 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
         [stack addArrangedSubview:[NSButton buttonWithTitle:L(@"Разрешить запуск при входе…")
             target:self action:@selector(toggleLogin)]];
     }
+    NSButton *about = [NSButton buttonWithTitle:L(@"О нас") target:self action:@selector(openRepository)];
+    about.bordered = NO;
+    about.attributedTitle = [[NSAttributedString alloc] initWithString:about.title attributes:@{
+        NSFontAttributeName: about.font ?: [NSFont systemFontOfSize:NSFont.systemFontSize],
+        NSForegroundColorAttributeName: NSColor.linkColor,
+        NSUnderlineStyleAttributeName: @(NSUnderlineStyleSingle)
+    }];
+    [stack addArrangedSubview:about];
     stack.orientation = NSUserInterfaceLayoutOrientationVertical;
     stack.alignment = NSLayoutAttributeLeading;
     stack.spacing = 12;
@@ -676,6 +690,10 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
         [stack.bottomAnchor constraintLessThanOrEqualToAnchor:view.bottomAnchor constant:-16],
         [detail.widthAnchor constraintLessThanOrEqualToAnchor:stack.widthAnchor]
     ]];
+}
+
+- (void)openRepository {
+    [NSWorkspace.sharedWorkspace openURL:[NSURL URLWithString:RepositoryURL]];
 }
 
 - (void)changeLanguage:(NSPopUpButton *)sender {
