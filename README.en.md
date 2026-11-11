@@ -50,9 +50,9 @@ Choose your language in the welcome window and select **Continue**. Route Shield
 1. Click the Route Shield icon in the menu bar and choose **Add Apps…**. Open **Applications** in Finder and drag an app such as Calculator into the drop area.
 2. Open the Route Shield menu again and select Calculator. Wait for the IPv4 and IPv6 checks, then choose **Open** or **Cancel**.
 3. To launch apps from the Dock, choose **Create or Update Dock Shortcuts**. Drag the shortcuts from `~/Applications/Route Shield` into the Dock in place of the original icons.
-4. Click the Route Shield icon and choose **Settings…**. In **General**, choose which connection details appear in the menu and the prelaunch window, change the language, or enable launch at login or force-quit. In **Notifications**, enable notifications, choose what they include, and send a test banner. The **About Us** tab links to the GitHub repository.
+4. Click the Route Shield icon and choose **Settings…**. In **General**, choose which connection details appear in the menu and the prelaunch window, change the language, or enable launch at login or force-quit. In **Notifications**, enable notifications, choose what they include, and send a test banner with your current connection details. The **About Us** tab links to the GitHub repository.
 
-The app list lives at `~/Library/Application Support/VPN Guard/.env`, the same path used by earlier versions. Choose **Open .env** to remove an ID from the `APPS=` line or add another ID separated by a comma.
+The app list lives at `~/Library/Application Support/VPN Guard/.env`. To edit it manually, choose **Settings… → General → Open Configuration File…**. Remove IDs from the `APPS=` line or add new IDs separated by commas. The template comments are in English.
 
 If you pinned shortcuts from the old `~/Applications/VPN Guard` folder, recreate them and pin the copies from `~/Applications/Route Shield`. New shortcuts use the language selected in Settings.
 
@@ -62,7 +62,7 @@ After updating Route Shield, choose **Create or Update Dock Shortcuts** so that 
 
 Route Shield makes HTTPS requests to [ipify](https://www.ipify.org/) for IPv4 and [ifconfig.me](https://ifconfig.me/) for IPv6. Each service sees the public IP of the request. With split tunneling, a selected app may use a different route.
 
-Route Shield sends the detected public IP addresses to Country.is to estimate the country. If IPv4 and IPv6 map to different countries, the menu and prelaunch window show both. The lookup runs separately from monitoring and leaves **Open** available as soon as the IP checks finish. [Country.is](https://country.is/)
+Route Shield sends the detected public IP addresses to Country.is to estimate the country. The **Connection country** section in the menu and prelaunch window shows separate rows for IPv4 and IPv6. The lookup leaves **Open** available as soon as the IP checks finish. [Country.is](https://country.is/)
 
 When monitoring is enabled, Route Shield checks after macOS network events, after wake, and about every two minutes. The first successful result establishes a baseline for each address family. A failed request by itself does not count as an IP change.
 
