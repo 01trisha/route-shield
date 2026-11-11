@@ -45,12 +45,12 @@ Before updating, quit Route Shield from the shield menu. The installer replaces 
 
 ## First run
 
+Choose your language in the welcome window and select **Continue**. Route Shield suggests Russian if Russian is your preferred macOS language and English for all other languages.
+
 1. Choose **shield → Add Apps…**. Open **Applications** in Finder and drag an app such as Calculator into the drop area.
 2. Open the shield menu again and select Calculator. Wait for the IPv4 and IPv6 checks, then choose **Open** or **Cancel**.
 3. To launch apps from the Dock, choose **Create or Update Dock Shortcuts**. Drag the shortcuts from `~/Applications/Route Shield` into the Dock in place of the original icons.
-4. Open **shield → Settings…** to change the language or enable launch at login, notifications, or force-quit. **Test Notification** sends a sample banner once macOS grants notification permission. **About Us** opens the GitHub repository.
-
-The default interface language is Russian. To switch to English, choose **Настройки…** in the shield menu and select **English** under **Язык интерфейса**.
+4. Open **shield → Settings…**. In **General**, choose which connection details appear in the shield menu and the prelaunch window, change the language, or enable launch at login or force-quit. In **Notifications**, enable notifications, choose what they include, and send a test banner. The **About Us** tab links to the GitHub repository.
 
 The app list lives at `~/Library/Application Support/VPN Guard/.env`, the same path used by earlier versions. Choose **Open .env** to remove an ID from the `APPS=` line or add another ID separated by a comma.
 
@@ -65,6 +65,8 @@ Route Shield makes HTTPS requests to [ipify](https://www.ipify.org/) for IPv4 an
 Route Shield sends the detected public IP addresses to Country.is to estimate the country. If IPv4 and IPv6 map to different countries, the menu and prelaunch window show both. The lookup runs separately from monitoring and leaves **Open** available as soon as the IP checks finish. [Country.is](https://country.is/)
 
 When monitoring is enabled, Route Shield checks after macOS network events, after wake, and about every two minutes. The first successful result establishes a baseline for each address family. A failed request by itself does not count as an IP change.
+
+For each detected change, Route Shield sends one notification with the new IP address, country, or both. If force-quit is enabled and apps were closed, a second notification lists them.
 
 **The prelaunch check applies only to apps opened through the shield menu or its shortcuts.** Launching an app directly from Finder, Spotlight, or its original Dock icon bypasses the check. Force-quit runs after Route Shield detects an IP change. An app can still access the network before detection, and force-quitting can discard unsaved changes.
 
