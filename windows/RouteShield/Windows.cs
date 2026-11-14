@@ -352,11 +352,25 @@ internal sealed class AppsWindow : ShieldWindow
             };
             var remove = new Button
             {
-                Text = "×", ForeColor = Color.White, BackColor = Color.FromArgb(177, 32, 50), FlatStyle = FlatStyle.Flat,
+                ForeColor = Color.White, BackColor = Color.FromArgb(177, 32, 50), FlatStyle = FlatStyle.Flat,
                 Size = new Size(23, 23), Location = new Point(56, 7), TabStop = true,
                 AccessibleName = T($"Remove {app.Name}", $"Удалить {app.Name}")
             };
             remove.FlatAppearance.BorderSize = 0;
+            remove.Paint += (_, args) =>
+            {
+                var bounds = remove.ClientRectangle;
+                float centerX = (bounds.Width - 1) / 2f;
+                float centerY = (bounds.Height - 1) / 2f;
+                float halfLength = bounds.Width * 3.5f / 23f;
+                args.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                using var stroke = new Pen(remove.ForeColor, bounds.Width * 1.5f / 23f)
+                {
+                    StartCap = LineCap.Round, EndCap = LineCap.Round
+                };
+                args.Graphics.DrawLine(stroke, centerX - halfLength, centerY - halfLength, centerX + halfLength, centerY + halfLength);
+                args.Graphics.DrawLine(stroke, centerX + halfLength, centerY - halfLength, centerX - halfLength, centerY + halfLength);
+            };
             void ShapeRemoveButton()
             {
                 using var shape = new GraphicsPath();
