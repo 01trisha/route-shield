@@ -118,3 +118,5 @@
 "Режим закрытия при смене IP" = "Closing mode on IP change";
 "Режим закрытия при уходе в сон" = "Closing mode on sleep";
 "При закрытии крышки настройка срабатывает, если компьютер уходит в сон. Приложение может не успеть закрыться до сна." = "Closing the lid triggers this setting when the computer goes to sleep. Apps may need more time than the system allows.";
+"Скрыть сообщение об обновлении" = "Dismiss update message";
+"Скачать обновление %@…" = "Download Update %@…";

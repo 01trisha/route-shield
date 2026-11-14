@@ -93,7 +93,7 @@ If app closing is enabled and Route Shield closes apps after an IP change, a sep
 
 **Check for Updates…** is at the top of **Settings… → General**. Route Shield also checks the latest stable release on GitHub when it starts if at least a day has passed since the previous check. While Route Shield is running, the check repeats once a day.
 
-When an update is available, a dot appears beside the app icon. The menu links to the release page with DMG and ZIP downloads. If macOS allows Route Shield notifications, it also shows a banner for the new version.
+When an update is available, a message appears at the bottom of the menu. Click it to open **General** and focus **Download Update…**, which opens the release page with DMG and ZIP downloads. The cross hides the message for that version. If system notifications are enabled, Route Shield sends a notification when it finds an update and then about every two days. Clicking the notification also opens Settings.
 
 Before installing an update, quit Route Shield from its menu. Replace `Route Shield.app` in **Applications** with the new copy or run the source installer. Your app list and preferences are stored outside the app bundle and carry over.
 

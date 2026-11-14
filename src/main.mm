@@ -30,6 +30,10 @@ static NSString *const NotificationDetailsKey = @"NotificationDetails";
 static NSString *const LastUpdateCheckKey = @"LastUpdateCheck";
 static NSString *const LatestReleaseTagKey = @"LatestReleaseTag";
 static NSString *const UpdateNotificationTagKey = @"UpdateReleaseTag";
+static NSString *const DismissedUpdateTagKey = @"DismissedUpdateTag";
+static NSString *const LastUpdateNoticeTagKey = @"LastUpdateNoticeTag";
+static NSString *const LastUpdateNoticeDateKey = @"LastUpdateNoticeDate";
+static const NSTimeInterval UpdateNoticeInterval = 48 * 60 * 60;
 static const NSTimeInterval UpdateCheckInterval = 24 * 60 * 60;
 static const NSTimeInterval FastIPCheckInterval = 15;
 static const NSTimeInterval IdleIPCheckInterval = 120;
@@ -1008,7 +1012,10 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
 @property BOOL testingNotification;
 @property BOOL checkingForUpdate;
 @property BOOL updateResultRequested;
+@property BOOL checkingUpdateNoticePermission;
+@property (weak) NSButton *updateButton;
 @property (strong) NSTimer *updateCheckTimer;
+@property (strong) NSTimer *updateNoticeTimer;
 @property (strong) IPMonitor *ipMonitor;
 @property (copy) NSString *lastIPEvent;
 @property (strong) NSMutableSet<NSNumber *> *closingPIDs;
@@ -1060,6 +1067,7 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     [self updateIPMonitoring];
     [self updateAvailableReleaseIndicator];
     [self scheduleUpdateCheck];
+    [self remindAboutUpdate];
 }
 
 - (NSMenuItem *)addItem:(NSString *)title action:(SEL)action toMenu:(NSMenu *)menu {
@@ -1071,6 +1079,7 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
 
 - (void)menuNeedsUpdate:(NSMenu *)menu {
     [menu removeAllItems];
+    [self remindAboutUpdate];
     BOOL showIPv4 = ShowsConnectionField(ShowIPv4Key);
     BOOL showIPv6 = ShowsConnectionField(ShowIPv6Key);
     BOOL showCountry = ShowsConnectionField(ShowCountryKey);
@@ -1128,13 +1137,34 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     [self addItem:L(@"Создать или обновить ярлыки для Dock")
         action:identifiers.count ? @selector(createLaunchers) : nullptr toMenu:menu];
     [menu addItem:NSMenuItem.separatorItem];
-    NSString *update = AvailableUpdateTag();
-    if (update) {
-        NSString *title = [NSString stringWithFormat:L(@"Доступна версия %@…"), ReleaseVersion(update)];
-        [self addItem:title action:@selector(openAvailableUpdate) toMenu:menu];
-    }
     [self addItem:L(@"Настройки…") action:@selector(showSettings) toMenu:menu];
     [self addItem:[L(@"Выйти из ") stringByAppendingString:GuardName] action:@selector(quit) toMenu:menu];
+    NSString *update = AvailableUpdateTag();
+    if (update && ![update isEqualToString:[NSUserDefaults.standardUserDefaults stringForKey:DismissedUpdateTagKey]]) {
+        [menu addItem:NSMenuItem.separatorItem];
+        NSString *title = [NSString stringWithFormat:L(@"Доступна версия %@"), ReleaseVersion(update)];
+        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title action:@selector(showUpdateSettings) keyEquivalent:@""];
+        item.target = self;
+        NSButton *open = [NSButton buttonWithTitle:title target:self action:@selector(openUpdateBanner)];
+        open.bordered = NO;
+        open.alignment = NSTextAlignmentLeft;
+        open.contentTintColor = NSColor.controlAccentColor;
+        NSButton *dismiss = [NSButton buttonWithImage:[NSImage imageWithSystemSymbolName:@"xmark"
+            accessibilityDescription:L(@"Скрыть сообщение об обновлении")] target:self action:@selector(dismissUpdateBanner:)];
+        dismiss.bordered = NO;
+        dismiss.toolTip = L(@"Скрыть сообщение об обновлении");
+        dismiss.identifier = update;
+        CGFloat width = open.intrinsicContentSize.width + 60;
+        NSView *row = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, MAX(225, width), 32)];
+        open.frame = NSMakeRect(14, 0, row.bounds.size.width - 48, 32);
+        open.autoresizingMask = NSViewWidthSizable;
+        dismiss.frame = NSMakeRect(row.bounds.size.width - 30, 3, 24, 26);
+        dismiss.autoresizingMask = NSViewMinXMargin;
+        [row addSubview:open];
+        [row addSubview:dismiss];
+        item.view = row;
+        [menu addItem:item];
+    }
 }
 
 - (NSStackView *)languageRow {
@@ -1314,6 +1344,22 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     [self.settingsWindow makeKeyAndOrderFront:nil];
 }
 
+- (void)showUpdateSettings {
+    [self showSettings];
+    [self.settingsTabs selectTabViewItemWithIdentifier:@"general"];
+    [self.settingsWindow makeFirstResponder:self.updateButton];
+}
+
+- (void)openUpdateBanner {
+    [self.statusItem.menu cancelTracking];
+    [self showUpdateSettings];
+}
+
+- (void)dismissUpdateBanner:(NSButton *)sender {
+    [NSUserDefaults.standardUserDefaults setObject:sender.identifier forKey:DismissedUpdateTagKey];
+    [self.statusItem.menu cancelTracking];
+}
+
 - (NSButton *)connectionCheckbox:(NSString *)title key:(NSString *)key {
     NSButton *button = [NSButton checkboxWithTitle:title target:self action:@selector(changeConnectionField:)];
     button.identifier = key;
@@ -1323,9 +1369,14 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
 
 - (NSArray<NSView *> *)generalControls {
     BOOL waitingForUpdate = self.checkingForUpdate && self.updateResultRequested;
-    NSButton *checkUpdates = [NSButton buttonWithTitle:waitingForUpdate ? L(@"Проверяю обновления…") : L(@"Проверить обновления…")
-        target:self action:@selector(checkForUpdates)];
-    checkUpdates.enabled = !waitingForUpdate;
+    NSString *tag = AvailableUpdateTag();
+    NSString *title = tag ? [NSString stringWithFormat:L(@"Скачать обновление %@…"), ReleaseVersion(tag)] :
+        waitingForUpdate ? L(@"Проверяю обновления…") : L(@"Проверить обновления…");
+    NSButton *checkUpdates = [NSButton buttonWithTitle:title target:self
+        action:tag ? @selector(openAvailableUpdate) : @selector(checkForUpdates)];
+    checkUpdates.enabled = tag != nil || !waitingForUpdate;
+    if (tag) checkUpdates.bezelColor = NSColor.controlAccentColor;
+    self.updateButton = checkUpdates;
     NSTextField *version = [NSTextField labelWithString:[NSString stringWithFormat:L(@"Версия %@"), CurrentAppVersion()]];
     version.textColor = NSColor.secondaryLabelColor;
     NSStackView *updates = [NSStackView stackViewWithViews:@[checkUpdates, version]];
@@ -1403,6 +1454,7 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
 - (void)refreshSettings {
     if (!self.settingsWindow) return;
     self.settingsWindow.title = L(@"Настройки Route Shield");
+    BOOL focusedUpdate = self.updateButton && self.settingsWindow.firstResponder == self.updateButton;
     NSString *selected = self.settingsTabs.selectedTabViewItem.identifier;
     NSTabView *tabs = [[NSTabView alloc] initWithFrame:self.settingsWindow.contentView.bounds];
     [tabs addTabViewItem:SettingsTab(@"general", L(@"Основные"), [self generalControls])];
@@ -1418,6 +1470,7 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     if (selected) [tabs selectTabViewItemWithIdentifier:selected];
     self.settingsTabs = tabs;
     self.settingsWindow.contentView = tabs;
+    if (focusedUpdate) [self.settingsWindow makeFirstResponder:self.updateButton];
 }
 
 - (void)openRepository {
@@ -1479,57 +1532,89 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
 }
 
 - (void)finishUpdateCheck:(NSString *)tag {
-    NSString *previous = AvailableUpdateTag();
     if (tag) [NSUserDefaults.standardUserDefaults setObject:tag forKey:LatestReleaseTagKey];
     NSString *available = AvailableUpdateTag();
     BOOL showResult = self.updateResultRequested;
     self.checkingForUpdate = NO;
     self.updateResultRequested = NO;
     [self updateAvailableReleaseIndicator];
-    if (showResult) {
-        [self refreshSettings];
-        [self showUpdateCheckResult:tag ? available : nil succeeded:tag != nil];
-    } else if (available && ![previous isEqualToString:available]) {
-        [self announceUpdate:available];
+    if (self.settingsWindow.visible) [self refreshSettings];
+    if (showResult && !available) {
+        [self showUpdateCheckResult:tag != nil];
+    } else if (showResult && self.settingsWindow.visible) {
+        [self showUpdateSettings];
     }
+    [self remindAboutUpdate];
 }
 
-- (void)showUpdateCheckResult:(NSString *)tag succeeded:(BOOL)succeeded {
+- (void)showUpdateCheckResult:(BOOL)succeeded {
     if (!self.settingsWindow.visible) return;
     NSAlert *alert = [[NSAlert alloc] init];
     if (!succeeded) {
         alert.messageText = L(@"Не удалось проверить обновления");
         alert.informativeText = L(@"Проверьте подключение к интернету и попробуйте ещё раз.");
-    } else if (tag) {
-        alert.messageText = [NSString stringWithFormat:L(@"Доступна версия %@"), ReleaseVersion(tag)];
-        alert.informativeText = L(@"Скачайте DMG или ZIP со страницы релиза GitHub.");
     } else {
         alert.messageText = L(@"Обновлений нет");
         alert.informativeText = [NSString stringWithFormat:L(@"Установлена версия %@."), CurrentAppVersion()];
     }
-    [alert addButtonWithTitle:tag ? L(@"Открыть страницу релиза") : @"OK"];
-    if (tag) [alert addButtonWithTitle:L(@"Позже")];
-    [alert beginSheetModalForWindow:self.settingsWindow completionHandler:^(NSModalResponse response) {
-        if (tag && response == NSAlertFirstButtonReturn) {
-            [NSWorkspace.sharedWorkspace openURL:ReleaseURL(tag)];
-        }
-    }];
+    [alert addButtonWithTitle:@"OK"];
+    [alert beginSheetModalForWindow:self.settingsWindow completionHandler:nil];
 }
 
-- (void)announceUpdate:(NSString *)tag {
+- (void)remindAboutUpdate {
+    NSString *tag = AvailableUpdateTag();
+    NSUserDefaults *preferences = NSUserDefaults.standardUserDefaults;
+    [self.updateNoticeTimer invalidate];
+    self.updateNoticeTimer = nil;
+    if (!tag || self.checkingUpdateNoticePermission) return;
+    NSDate *last = [preferences objectForKey:LastUpdateNoticeDateKey];
+    if ([tag isEqualToString:[preferences stringForKey:LastUpdateNoticeTagKey]] && [last isKindOfClass:NSDate.class]) {
+        NSTimeInterval delay = UpdateNoticeInterval + MIN(0, last.timeIntervalSinceNow);
+        if (delay > 0) {
+            __weak GuardApp *weakSelf = self;
+            self.updateNoticeTimer = [NSTimer timerWithTimeInterval:delay repeats:NO block:^(NSTimer *timer) {
+                (void)timer;
+                [weakSelf remindAboutUpdate];
+            }];
+            self.updateNoticeTimer.tolerance = 60;
+            [NSRunLoop.mainRunLoop addTimer:self.updateNoticeTimer forMode:NSRunLoopCommonModes];
+            return;
+        }
+    }
+    self.checkingUpdateNoticePermission = YES;
     UNUserNotificationCenter *center = UNUserNotificationCenter.currentNotificationCenter;
     [center getNotificationSettingsWithCompletionHandler:^(UNNotificationSettings *settings) {
-        if (settings.authorizationStatus != UNAuthorizationStatusAuthorized &&
-            settings.authorizationStatus != UNAuthorizationStatusProvisional) return;
         dispatch_async(dispatch_get_main_queue(), ^{
-            if (![AvailableUpdateTag() isEqualToString:tag]) return;
+            if (settings.authorizationStatus == UNAuthorizationStatusNotDetermined && [AvailableUpdateTag() isEqualToString:tag]) {
+                RequestIPNotificationAuthorization(^(BOOL granted, NSError *error) {
+                    (void)error;
+                    self.checkingUpdateNoticePermission = NO;
+                    if (granted) [self remindAboutUpdate];
+                });
+                return;
+            }
+            if ((settings.authorizationStatus != UNAuthorizationStatusAuthorized &&
+                 settings.authorizationStatus != UNAuthorizationStatusProvisional) ||
+                ![AvailableUpdateTag() isEqualToString:tag]) {
+                self.checkingUpdateNoticePermission = NO;
+                return;
+            }
             UNMutableNotificationContent *content = [[UNMutableNotificationContent alloc] init];
             content.title = L(@"Доступно обновление Route Shield");
             content.body = [NSString stringWithFormat:L(@"Доступна версия %@"), ReleaseVersion(tag)];
             content.userInfo = @{UpdateNotificationTagKey: tag};
-            NSString *identifier = [@"route-shield-update-" stringByAppendingString:tag];
-            UNNotificationRequest *request = [UNNotificationRequest requestWithIdentifier:identifier content:content trigger:nil];
-            [center addNotificationRequest:request withCompletionHandler:nil];
+            UNNotificationRequest *request = [UNNotificationRequest requestWithIdentifier:@"route-shield-update"
+                content:content trigger:nil];
+            [center addNotificationRequest:request withCompletionHandler:^(NSError *error) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    self.checkingUpdateNoticePermission = NO;
+                    if (!error) {
+                        [preferences setObject:tag forKey:LastUpdateNoticeTagKey];
+                        [preferences setObject:NSDate.date forKey:LastUpdateNoticeDateKey];
+                        [self remindAboutUpdate];
+                    }
+                });
+            }];
         });
     }];
 }
@@ -1794,6 +1879,7 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     (void)notification;
     [self.ipMonitor stop];
     [self.updateCheckTimer invalidate];
+    [self.updateNoticeTimer invalidate];
     if (self.sleepObserver) [NSWorkspace.sharedWorkspace.notificationCenter removeObserver:self.sleepObserver];
 }
 
@@ -1815,7 +1901,6 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     NSUserDefaults *settings = NSUserDefaults.standardUserDefaults;
     if ([settings boolForKey:NotifyIPChangesKey]) {
         [settings setBool:NO forKey:NotifyIPChangesKey];
-        [UNUserNotificationCenter.currentNotificationCenter removeAllPendingNotificationRequests];
         [self updateIPMonitoring];
         [self refreshSettings];
         return;
@@ -2006,10 +2091,10 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
 - (void)userNotificationCenter:(UNUserNotificationCenter *)center didReceiveNotificationResponse:(UNNotificationResponse *)response
          withCompletionHandler:(void (^)(void))completionHandler {
     (void)center;
-    NSURL *url = ReleaseURL(response.notification.request.content.userInfo[UpdateNotificationTagKey]);
-    if (url && [response.actionIdentifier isEqualToString:UNNotificationDefaultActionIdentifier]) {
+    NSString *tag = response.notification.request.content.userInfo[UpdateNotificationTagKey];
+    if (ReleaseVersion(tag) && [response.actionIdentifier isEqualToString:UNNotificationDefaultActionIdentifier]) {
         dispatch_async(dispatch_get_main_queue(), ^{
-            [NSWorkspace.sharedWorkspace openURL:url];
+            [self showUpdateSettings];
             completionHandler();
         });
     } else {
