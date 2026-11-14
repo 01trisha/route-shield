@@ -65,12 +65,12 @@ internal sealed class TrayApplication : ApplicationContext
         {
             using var welcome = new WelcomeWindow(settings, artwork);
             if (Show(welcome) != DialogResult.OK) { ExitThread(); return; }
-            var previous = (settings.Language, settings.Notify, settings.Details, settings.ForceClose);
-            (settings.Language, settings.Notify, settings.Details, settings.ForceClose) = welcome.Choice;
+            var previous = (settings.Language, settings.Notify, settings.Details, settings.ForceClose, settings.ClosingMode);
+            (settings.Language, settings.Notify, settings.Details, settings.ForceClose, settings.ClosingMode) = welcome.Choice;
             settings.WelcomeCompleted = true;
             if (!Save())
             {
-                (settings.Language, settings.Notify, settings.Details, settings.ForceClose) = previous;
+                (settings.Language, settings.Notify, settings.Details, settings.ForceClose, settings.ClosingMode) = previous;
                 settings.WelcomeCompleted = false;
                 ExitThread();
                 return;
@@ -297,7 +297,7 @@ internal sealed class TrayApplication : ApplicationContext
         using var window = new SettingsWindow(settings, artwork, TestNotification, () => CheckUpdates(manual: true), OpenUrl, Error);
         if (Show(window) != DialogResult.OK) return;
         var previous = (settings.Language, settings.ShowIPv4, settings.ShowIPv6, settings.ShowCountry,
-            settings.Notify, settings.Details, settings.ForceClose);
+            settings.Notify, settings.Details, settings.ForceClose, settings.CloseOnSleep, settings.ClosingMode, settings.SleepClosingMode);
         bool startup;
         try
         {
@@ -306,11 +306,11 @@ internal sealed class TrayApplication : ApplicationContext
         }
         catch (Exception error) when (IsFileError(error)) { Error(error.Message); return; }
         (settings.Language, settings.ShowIPv4, settings.ShowIPv6, settings.ShowCountry,
-            settings.Notify, settings.Details, settings.ForceClose) = window.Choice;
+            settings.Notify, settings.Details, settings.ForceClose, settings.CloseOnSleep, settings.ClosingMode, settings.SleepClosingMode) = window.Choice;
         if (!Save())
         {
             (settings.Language, settings.ShowIPv4, settings.ShowIPv6, settings.ShowCountry,
-                settings.Notify, settings.Details, settings.ForceClose) = previous;
+                settings.Notify, settings.Details, settings.ForceClose, settings.CloseOnSleep, settings.ClosingMode, settings.SleepClosingMode) = previous;
             if (startup != window.Startup)
             {
                 try { WindowsApps.StartsAtLogin = startup; }

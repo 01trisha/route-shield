@@ -18,6 +18,7 @@ internal sealed class Monitor : IDisposable
     private readonly Timer retry = new() { Interval = 750 };
     private readonly RouteCallback routeCallback;
     private readonly IntPtr routeHandle;
+    private readonly PowerNotifications power;
     private CancellationTokenSource? active;
     private long lastProbe;
     private bool disposed, checkingProcesses;
@@ -37,7 +38,8 @@ internal sealed class Monitor : IDisposable
         try { NotifyRouteChange2(0, routeCallback, IntPtr.Zero, false, out routeHandle); }
         catch (EntryPointNotFoundException) { }
         NetworkChange.NetworkAddressChanged += AddressChanged;
-        SystemEvents.PowerModeChanged += PowerChanged;
+        power = new PowerNotifications(CloseForSleep, PostChange);
+        if (!power.Registered) SystemEvents.PowerModeChanged += PowerChanged;
     }
 
     internal void Apply(bool refresh = false)
@@ -80,6 +82,14 @@ internal sealed class Monitor : IDisposable
     private void PowerChanged(object sender, PowerModeChangedEventArgs args)
     {
         if (args.Mode == PowerModes.Resume) PostChange();
+        if (args.Mode == PowerModes.Suspend)
+            ui.Send(_ => CloseForSleep(), null);
+    }
+
+    internal void CloseForSleep()
+    {
+        if (disposed || !preferences.WelcomeCompleted || !preferences.CloseOnSleep) return;
+        _ = WindowsApps.Close(preferences.Apps, preferences.SleepClosingMode, confirm: false);
     }
 
     private void PostChange() => ui.Post(_ =>
@@ -113,7 +123,8 @@ internal sealed class Monitor : IDisposable
                 if (close is null)
                 {
                     var apps = preferences.ForceClose ? preferences.Apps.ToArray() : [];
-                    close = apps.Length > 0 ? Task.Run(() => WindowsApps.Close(apps)) : Task.FromResult(Array.Empty<string>());
+                    var mode = preferences.ClosingMode;
+                    close = apps.Length > 0 ? Task.Run(() => WindowsApps.Close(apps, mode)) : Task.FromResult(Array.Empty<string>());
                 }
                 return address;
             }
@@ -139,12 +150,55 @@ internal sealed class Monitor : IDisposable
     {
         disposed = true;
         NetworkChange.NetworkAddressChanged -= AddressChanged;
-        SystemEvents.PowerModeChanged -= PowerChanged;
+        if (!power.Registered) SystemEvents.PowerModeChanged -= PowerChanged;
+        power.Dispose();
         if (routeHandle != IntPtr.Zero) CancelMibChangeNotify2(routeHandle);
         active?.Cancel();
         periodic.Dispose();
         debounce.Dispose();
         retry.Dispose();
+    }
+
+    private sealed class PowerNotifications : NativeWindow, IDisposable
+    {
+        private readonly Action suspend, resume;
+        private readonly IntPtr registration;
+        internal bool Registered => registration != IntPtr.Zero;
+
+        internal PowerNotifications(Action suspend, Action resume)
+        {
+            this.suspend = suspend;
+            this.resume = resume;
+            CreateHandle(new CreateParams());
+            try { registration = RegisterSuspendResumeNotification(Handle, 0); }
+            catch (EntryPointNotFoundException) { }
+            if (!Registered) DestroyHandle();
+        }
+
+        protected override void WndProc(ref Message message)
+        {
+            const int powerBroadcast = 0x218;
+            const int suspendEvent = 0x4;
+            const int automaticResumeEvent = 0x12;
+            if (message.Msg == powerBroadcast)
+            {
+                if (message.WParam == suspendEvent) suspend();
+                if (message.WParam == automaticResumeEvent) resume();
+            }
+            base.WndProc(ref message);
+        }
+
+        public void Dispose()
+        {
+            if (!Registered) return;
+            UnregisterSuspendResumeNotification(registration);
+            DestroyHandle();
+        }
+
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern IntPtr RegisterSuspendResumeNotification(IntPtr recipient, uint flags);
+        [DllImport("user32.dll", SetLastError = true)]
+        private static extern bool UnregisterSuspendResumeNotification(IntPtr registration);
     }
 
     private delegate void RouteCallback(IntPtr context, IntPtr row, uint type);

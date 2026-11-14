@@ -2,6 +2,8 @@ using System.Text.Json;
 
 namespace RouteShield;
 
+internal enum CloseMode { Emergency, Safe }
+
 internal enum NotificationDetails { Address, Country, Both }
 
 internal sealed record TrackedApp(Guid Id, string Name, string Path, string Arguments, string WorkingDirectory, string IconPath, int IconIndex);
@@ -18,6 +20,9 @@ internal sealed class Preferences
     public bool ShowCountry { get; set; } = true;
     public bool Notify { get; set; }
     public bool ForceClose { get; set; }
+    public bool CloseOnSleep { get; set; }
+    public CloseMode SleepClosingMode { get; set; }
+    public CloseMode ClosingMode { get; set; }
     public NotificationDetails Details { get; set; }
     public DateTimeOffset LastUpdateCheck { get; set; }
     public string? LastNotifiedTag { get; set; }
@@ -30,6 +35,8 @@ internal sealed class Preferences
             ?? throw new JsonException("Missing settings object.");
         if (settings.Apps is null || settings.Apps.Any(app => app is null || string.IsNullOrWhiteSpace(app.Path)))
             throw new JsonException("Invalid application list.");
+        if (!Enum.IsDefined(settings.ClosingMode)) settings.ClosingMode = CloseMode.Emergency;
+        if (!Enum.IsDefined(settings.SleepClosingMode)) settings.SleepClosingMode = CloseMode.Emergency;
         if (!Enum.IsDefined(settings.Details)) settings.Details = NotificationDetails.Address;
         return settings;
     }

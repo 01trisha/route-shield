@@ -2,13 +2,15 @@
 
 [Русский](README.ru.md) · [macOS](../README.en.md)
 
-Route Shield runs in the Windows notification area. Open its icon to see your public IPv4 and IPv6 addresses and the country associated with each. Add desktop executables or their shortcuts by dragging them from File Explorer. The app grid shows their icons and lets you remove entries.
+Route Shield runs in the Windows notification area. Open its icon to see your public IPv4 and IPv6 addresses and the country associated with each. Add desktop executables or their shortcuts by dragging them from File Explorer. **Choose App…** opens a file dialog for `.exe` files. The app grid shows their icons and lets you remove entries.
 
-Choose an app from the tray menu or create a Route Shield shortcut on the desktop to check your connection before opening it. Direct launches work as usual. If you enable force-quit, Route Shield also tracks apps opened directly. When it confirms an IP change, it starts closing tracked processes immediately and can send two notifications, one for the new connection and one listing confirmed closures. Closing may discard unsaved work.
+Choose an app from the tray menu or create a Route Shield shortcut on the desktop to check your connection before opening it. Direct launches work as usual. If you enable closing on IP changes, Route Shield also tracks apps opened directly. When it confirms an IP change, it starts closing tracked processes immediately and can send two notifications, one for the new connection and one listing confirmed closures. Closing may discard unsaved work.
+
+Under **General → Closing apps**, choose independent modes for IP changes and sleep. Sleep closing is off by default and runs when Windows goes to sleep. **Emergency** closes connections sooner and may discard unsaved changes. **Safe** requests normal window closing. Apps may wait for input or stay open. They may also need more time than Windows allows before sleep.
 
 ## Try a build
 
-Requires Windows 11 on x64. Download the ZIP or the per-user installer from the Windows build artifact. For the ZIP, extract the entire archive and run `RouteShield.exe`. The packages include .NET. First launch walks through language, IP notifications and force-quit. With a portable build use the same folder across updates to keep desktop and startup shortcuts pointing at it.
+Requires Windows 11 on x64. Download the ZIP or the per-user installer from the Windows build artifact. For the ZIP, extract the entire archive and run `RouteShield.exe`. The packages include .NET. First launch walks through language, IP notifications and choosing a closing mode. With a portable build use the same folder across updates to keep desktop and startup shortcuts pointing at it.
 
 Settings and tracked apps are stored in `%LOCALAPPDATA%\Route Shield\settings.json` and survive updates. The **General** tab includes an action to open this file. Close Route Shield before editing it. Updates are checked manually and at most once a day in the background. They open a GitHub release page for a compatible Windows build.
 

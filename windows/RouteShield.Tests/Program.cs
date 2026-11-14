@@ -15,12 +15,20 @@ internal static class Program
             Console.ReadLine();
             return 0;
         }
+        if (args is ["--window"])
+        {
+            using var form = new Form { Text = "Route Shield closing test" };
+            form.Shown += (_, _) => Console.WriteLine("ready");
+            form.FormClosing += (_, _) => Console.WriteLine("close requested");
+            Application.Run(form);
+            return 0;
+        }
         try
         {
             CheckBaseline();
             CheckVersions();
             CheckWindows();
-            CheckTermination().GetAwaiter().GetResult();
+            Task.Run(CheckTermination).GetAwaiter().GetResult();
             return 0;
         }
         catch (Exception error)
@@ -84,6 +92,7 @@ internal static class Program
                         break;
                     case 3:
                         Find<CheckBox>(window).Checked = true;
+                        Find<ComboBox>(window).SelectedIndex = (int)CloseMode.Safe;
                         ClickNext(window);
                         break;
                     default:
@@ -96,7 +105,7 @@ internal static class Program
         timer.Stop();
         if (failure is not null) throw new InvalidOperationException($"Welcome action {action} failed.", failure);
         Require(result == DialogResult.OK && window.Choice.Item1 == "ru" && window.Choice.Item2 && window.Choice.Item3 == NotificationDetails.Both &&
-                window.Choice.Item4, "All welcome steps retain the notification and force-quit choices");
+                window.Choice.Item4 && window.Choice.Item5 == CloseMode.Safe, "Welcome retains notification and safe closing choices");
         Require(!preferences.WelcomeCompleted && !preferences.ForceClose, "The welcome window stages changes");
     }
 
@@ -125,6 +134,18 @@ internal static class Program
                     File.Copy(file, Path.Combine(Path.GetDirectoryName(path)!, Path.GetFileName(file)));
             }
             var tracked = WindowsApps.Read(trackedPath) with { Name = "Tracked test app" };
+            CheckSleep(tracked);
+            using var graceful = StartChild(trackedPath, "--window");
+            try
+            {
+                Require(await graceful.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10)) == "ready",
+                    "Test window launched");
+                var closed = await WindowsApps.Close([tracked], CloseMode.Safe).WaitAsync(TimeSpan.FromSeconds(10));
+                Require(await graceful.StandardOutput.ReadLineAsync() == "close requested" && graceful.ExitCode == 0 &&
+                    closed.SequenceEqual(["Tracked test app"]), "Safe mode sends a normal closing request");
+            }
+            finally { StopChild(graceful); }
+
             using var first = StartChild(trackedPath);
             using var second = StartChild(trackedPath);
             using var other = StartChild(otherPath);
@@ -134,23 +155,50 @@ internal static class Program
                     Require(await process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10)) == "ready",
                         "Test process launched");
                 Require(WindowsApps.IsAnyRunning([tracked]), "Tracked app opened directly is found");
-                var closed = await WindowsApps.Close([tracked]);
+                _ = await WindowsApps.Close([tracked], CloseMode.Safe);
+                Require(!first.HasExited && !second.HasExited, "Safe mode leaves apps without a main window running");
+                var closed = await WindowsApps.Close([tracked], CloseMode.Emergency);
                 Require(closed.SequenceEqual(["Tracked test app"]), "Confirmed instances are grouped by app");
                 Require(first.HasExited && second.HasExited && !other.HasExited, "Only processes matching the full path are closed");
             }
             finally
             {
-                foreach (var process in new[] { first, second, other })
-                {
-                    if (!process.HasExited) process.Kill();
-                    process.WaitForExit(5000);
-                }
+                foreach (var process in new[] { first, second, other }) StopChild(process);
             }
         }
         finally { Directory.Delete(directory, recursive: true); }
     }
 
-    private static Process StartChild(string path) => Process.Start(new ProcessStartInfo(path, "--wait")
+    private static void CheckSleep(TrackedApp tracked)
+    {
+        using var child = StartChild(tracked.Path);
+        try
+        {
+            Require(child.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10)).GetAwaiter().GetResult() == "ready",
+                "Sleep test process launched");
+            var settings = new Preferences { WelcomeCompleted = true, Apps = [tracked], ClosingMode = CloseMode.Safe };
+            using var connection = new Connection();
+            using var monitor = new Monitor(connection, settings, new SynchronizationContext());
+            monitor.CloseForSleep();
+            Require(!child.HasExited, "Closing on sleep is off by default");
+            settings.CloseOnSleep = true;
+            settings.SleepClosingMode = CloseMode.Safe;
+            monitor.CloseForSleep();
+            Require(!child.HasExited, "Safe sleep mode leaves windowless apps running");
+            settings.SleepClosingMode = CloseMode.Emergency;
+            monitor.CloseForSleep();
+            Require(child.WaitForExit(5000), "Emergency sleep mode closes the app independently of the IP mode");
+        }
+        finally { StopChild(child); }
+    }
+
+    private static void StopChild(Process process)
+    {
+        if (!process.HasExited) process.Kill();
+        process.WaitForExit(5000);
+    }
+
+    private static Process StartChild(string path, string argument = "--wait") => Process.Start(new ProcessStartInfo(path, argument)
     {
         UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardInput = true
     })!;

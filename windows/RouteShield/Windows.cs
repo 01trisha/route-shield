@@ -55,6 +55,23 @@ internal abstract class ShieldWindow : Form
         Text = text, Checked = selected, AutoSize = true, Margin = new Padding(3, 6, 3, 6)
     };
 
+    protected ComboBox CloseModePicker(CloseMode selected)
+    {
+        var picker = Picker([T("Emergency", "Экстренное"), T("Safe", "Безопасное")], (int)selected);
+        picker.AccessibleName = T("Closing mode", "Режим закрытия");
+        return picker;
+    }
+
+    protected Label CloseModeDescription()
+    {
+        var label = Caption(T(
+            "Emergency closing ends connections sooner but can discard unsaved changes. Safe closing lets the app save changes, but it may wait for input or stay open.",
+            "Экстренное быстрее разрывает соединения, но может потерять несохранённые данные. Безопасное даёт приложению сохранить изменения, но оно может ждать ответа или остаться открытым."));
+        label.MaximumSize = new Size(410, 0);
+        label.ForeColor = SystemColors.GrayText;
+        return label;
+    }
+
     protected string[] DetailOptions() =>
         [T("IP address", "IP-адрес"), T("Country", "Страна"), T("IP address and country", "IP-адрес и страна")];
 }
@@ -63,16 +80,17 @@ internal sealed class WelcomeWindow : ShieldWindow
 {
     private readonly Preferences draft;
     private int step = 1;
-    internal (string, bool, NotificationDetails, bool) Choice =>
-        (draft.Language, draft.Notify, draft.Details, draft.ForceClose);
+    internal (string, bool, NotificationDetails, bool, CloseMode) Choice =>
+        (draft.Language, draft.Notify, draft.Details, draft.ForceClose, draft.ClosingMode);
 
     internal WelcomeWindow(Preferences settings, Icon artwork) : base(new Preferences
     {
-        Language = settings.Language, Notify = settings.Notify, Details = settings.Details, ForceClose = settings.ForceClose
+        Language = settings.Language, Notify = settings.Notify, Details = settings.Details,
+        ForceClose = settings.ForceClose, ClosingMode = settings.ClosingMode
     }, artwork)
     {
         draft = base.settings;
-        ClientSize = new Size(495, 325);
+        ClientSize = new Size(495, 380);
         FormBorderStyle = FormBorderStyle.FixedDialog;
         Render();
     }
@@ -101,8 +119,8 @@ internal sealed class WelcomeWindow : ShieldWindow
                 break;
             default:
                 title = T("Close tracked apps", "Завершение приложений из списка");
-                description = T("Route Shield can force-quit apps on your list on a confirmed IP change. This may discard unsaved changes.",
-                    "Route Shield может принудительно закрыть приложения из списка при подтверждённой смене IP. Несохранённые данные могут потеряться.");
+                description = T("Route Shield can close tracked apps on a confirmed IP change, for example when a VPN connects or disconnects.",
+                    "Route Shield может закрыть приложения из списка при смене внешнего IP, например после подключения или отключения VPN.");
                 break;
         }
         var heading = Caption(title);
@@ -135,9 +153,11 @@ internal sealed class WelcomeWindow : ShieldWindow
         }
         else
         {
-            var close = Check(T("Force-quit apps on IP changes", "Принудительно завершать приложения при смене IP"), draft.ForceClose);
+            var close = Check(T("Close apps on IP changes", "Закрывать приложения при смене IP"), draft.ForceClose);
             close.CheckedChanged += (_, _) => draft.ForceClose = close.Checked;
-            body.Controls.Add(close);
+            var mode = CloseModePicker(draft.ClosingMode);
+            mode.SelectedIndexChanged += (_, _) => draft.ClosingMode = (CloseMode)mode.SelectedIndex;
+            body.Controls.AddRange([close, Caption(T("Closing mode", "Режим закрытия")), mode, CloseModeDescription()]);
         }
         var footer = Footer();
         var next = Button(step == 3 ? T("Done", "Готово") : T("Continue", "Продолжить"), (_, _) =>
@@ -157,19 +177,19 @@ internal sealed class WelcomeWindow : ShieldWindow
 
 internal sealed class SettingsWindow : ShieldWindow
 {
-    private readonly CheckBox four, six, country, notify, close, startup;
-    private readonly ComboBox language, details;
+    private readonly CheckBox four, six, country, notify, close, sleep, startup;
+    private readonly ComboBox language, details, mode, sleepMode;
 
     internal bool Startup => startup.Checked;
-    internal (string, bool, bool, bool, bool, NotificationDetails, bool) Choice =>
+    internal (string, bool, bool, bool, bool, NotificationDetails, bool, bool, CloseMode, CloseMode) Choice =>
         (language.SelectedIndex == 1 ? "ru" : "en", four.Checked, six.Checked, country.Checked,
-         notify.Checked, (NotificationDetails)details.SelectedIndex, close.Checked);
+         notify.Checked, (NotificationDetails)details.SelectedIndex, close.Checked, sleep.Checked, (CloseMode)mode.SelectedIndex, (CloseMode)sleepMode.SelectedIndex);
 
     internal SettingsWindow(Preferences settings, Icon artwork, Func<NotificationDetails, Task> test,
         Func<Task> update, Action<string> open, Action<string> error) : base(settings, artwork)
     {
         Text = T("Route Shield Settings", "Настройки Route Shield");
-        ClientSize = new Size(520, 390);
+        ClientSize = new Size(595, 610);
         MinimumSize = new Size(505, 400);
         var tabs = new TabControl { Dock = DockStyle.Fill };
         var general = AddTab(T("General", "Основные"));
@@ -189,8 +209,20 @@ internal sealed class SettingsWindow : ShieldWindow
         startup = Check(T("Launch at sign-in", "Запускать при входе в Windows"), false);
         try { startup.Checked = WindowsApps.StartsAtLogin; }
         catch (Exception problem) when (TrayApplication.IsFileError(problem)) { startup.Enabled = false; }
-        close = Check(T("Force-quit apps on IP changes", "Принудительно завершать приложения при смене IP"), settings.ForceClose);
-        general.Controls.AddRange([startup, close]);
+        close = Check(T("Close apps on IP changes", "Закрывать приложения при смене IP"), settings.ForceClose);
+        general.Controls.Add(startup);
+        sleep = Check(T("Close apps when the computer goes to sleep", "Закрывать приложения при уходе в сон"), settings.CloseOnSleep);
+        mode = CloseModePicker(settings.ClosingMode);
+        var closing = Caption(T("Closing apps", "Закрытие приложений"));
+        closing.Font = new Font(Font, FontStyle.Bold);
+        sleepMode = CloseModePicker(settings.SleepClosingMode);
+        mode.AccessibleName = T("Closing mode on IP change", "Режим закрытия при смене IP");
+        sleepMode.AccessibleName = T("Closing mode on sleep", "Режим закрытия при уходе в сон");
+        var sleepDetail = Caption(T("Closing the lid triggers this setting when the computer goes to sleep. Apps may need more time than the system allows.",
+            "При закрытии крышки настройка срабатывает, если компьютер уходит в сон. Приложение может не успеть закрыться до сна."));
+        sleepDetail.MaximumSize = new Size(490, 0);
+        sleepDetail.ForeColor = SystemColors.GrayText;
+        general.Controls.AddRange([closing, close, mode, sleep, sleepMode, CloseModeDescription(), sleepDetail]);
         general.Controls.Add(Button(T("Open Configuration File…", "Открыть конфигурационный файл…"), (_, _) =>
         {
             if (File.Exists(Preferences.FilePath)) open(Preferences.FilePath);
@@ -217,7 +249,11 @@ internal sealed class SettingsWindow : ShieldWindow
         var footer = Footer();
         var save = Button(T("Save", "Сохранить"), (_, _) =>
         {
-            if (!close.Checked || settings.ForceClose || MessageBox.Show(this,
+            bool enablingEmergency = mode.SelectedIndex == (int)CloseMode.Emergency &&
+                close.Checked && (!settings.ForceClose || settings.ClosingMode == CloseMode.Safe);
+            enablingEmergency |= sleepMode.SelectedIndex == (int)CloseMode.Emergency &&
+                sleep.Checked && (!settings.CloseOnSleep || settings.SleepClosingMode == CloseMode.Safe);
+            if (!enablingEmergency || MessageBox.Show(this,
                 T("Tracked apps may lose unsaved changes. Enable force-quit?", "Несохранённые данные могут потеряться. Включить принудительное завершение?"),
                 "Route Shield", MessageBoxButtons.YesNo, MessageBoxIcon.Warning) == DialogResult.Yes)
                 DialogResult = DialogResult.OK;
@@ -271,7 +307,7 @@ internal sealed class AppsWindow : ShieldWindow
             "Перетащите сюда .exe или ярлыки.\nВ Проводнике можно выбрать несколько."));
         header.Controls.Add(instructions);
         var footer = Footer();
-        footer.Controls.Add(Button(T("Browse…", "Выбрать…"), (_, _) => Browse()));
+        footer.Controls.Add(Button(T("Choose App…", "Выбрать приложение…"), (_, _) => Browse()));
         Controls.Add(grid);
         Controls.Add(header);
         Controls.Add(footer);
@@ -287,9 +323,11 @@ internal sealed class AppsWindow : ShieldWindow
         using var picker = new OpenFileDialog
         {
             Multiselect = true, DereferenceLinks = false,
-            Filter = T("Applications and shortcuts|*.exe;*.lnk", "Приложения и ярлыки|*.exe;*.lnk")
+            Title = T("Choose App", "Выбрать приложение"),
+            Filter = T("Applications (*.exe)|*.exe", "Приложения (*.exe)|*.exe"),
+            CheckFileExists = true
         };
-        if (picker.ShowDialog(this) == DialogResult.OK) AddFiles(picker.FileNames);
+        if (picker.ShowDialog(this) == DialogResult.OK) AddFiles(picker.FileNames, executableOnly: true);
     }
 
     private void WireDrop(Control target)
@@ -303,12 +341,17 @@ internal sealed class AppsWindow : ShieldWindow
         };
     }
 
-    private void AddFiles(string[] files)
+    private void AddFiles(string[] files, bool executableOnly = false)
     {
         List<TrackedApp> next = [.. settings.Apps];
         List<string> rejected = [];
         foreach (string file in files)
         {
+            if (executableOnly && !Path.GetExtension(file).Equals(".exe", StringComparison.OrdinalIgnoreCase))
+            {
+                rejected.Add(Path.GetFileName(file));
+                continue;
+            }
             try
             {
                 var entry = WindowsApps.Read(file);

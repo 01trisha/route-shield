@@ -127,9 +127,9 @@ internal static class WindowsApps
         }
     }
 
-    private static List<(TrackedApp App, SafeProcessHandle Handle)> Running(IReadOnlyList<TrackedApp> apps, bool terminate)
+    private static List<(TrackedApp App, SafeProcessHandle Handle, int Pid)> Running(IReadOnlyList<TrackedApp> apps, uint access)
     {
-        var result = new List<(TrackedApp, SafeProcessHandle)>();
+        var result = new List<(TrackedApp, SafeProcessHandle, int)>();
         if (apps.Count == 0) return result;
         var path = new StringBuilder(32768);
         foreach (var process in Process.GetProcesses())
@@ -139,8 +139,7 @@ internal static class WindowsApps
                 try
                 {
                     if (process.Id == Environment.ProcessId || process.SessionId != Session) continue;
-                    uint access = terminate ? Query | Terminate | Synchronize : Query;
-                    SafeProcessHandle handle = OpenProcess(access, false, process.Id);
+                    SafeProcessHandle handle = OpenProcess(Query | access, false, process.Id);
                     path.Clear();
                     int length = path.Capacity;
                     if (!handle.IsInvalid && QueryFullProcessImageName(handle, 0, path, ref length))
@@ -149,7 +148,7 @@ internal static class WindowsApps
                         var matched = apps.FirstOrDefault(app => string.Equals(app.Path, executable, StringComparison.OrdinalIgnoreCase));
                         if (matched is not null)
                         {
-                            result.Add((matched, handle));
+                            result.Add((matched, handle, process.Id));
                             continue;
                         }
                     }
@@ -163,26 +162,41 @@ internal static class WindowsApps
 
     internal static bool IsAnyRunning(IReadOnlyList<TrackedApp> apps)
     {
-        var running = Running(apps, terminate: false);
+        var running = Running(apps, 0);
         foreach (var item in running) item.Handle.Dispose();
         return running.Count > 0;
     }
 
-    internal static Task<string[]> Close(IReadOnlyList<TrackedApp> apps)
+    internal static Task<string[]> Close(IReadOnlyList<TrackedApp> apps, CloseMode mode, bool confirm = true)
     {
-        var pending = Running(apps, terminate: true);
+        bool safe = mode == CloseMode.Safe;
+        uint access = (safe ? 0 : Terminate) | (confirm ? Synchronize : 0);
         var terminated = new List<Task<string?>>();
-        foreach (var (app, handle) in pending)
+        foreach (var (app, handle, pid) in Running(apps, access))
         {
-            if (TerminateProcess(handle, 1))
+            bool requested = safe ? RequestClose(pid) : TerminateProcess(handle, 1);
+            if (requested && confirm)
                 terminated.Add(Task.Run(() =>
                 {
                     using (handle)
-                        return WaitForSingleObject(handle, 5000) == 0 ? app.Name : null;
+                        return WaitForSingleObject(handle, safe ? 60000u : 5000u) == 0 ? app.Name : null;
                 }));
             else handle.Dispose();
         }
         return Confirm(terminated);
+    }
+
+    private static bool RequestClose(int pid)
+    {
+        try
+        {
+            using var process = Process.GetProcessById(pid);
+            return process.CloseMainWindow();
+        }
+        catch (Exception error) when (error is ArgumentException or InvalidOperationException or Win32Exception)
+        {
+            return false;
+        }
     }
 
     private static async Task<string[]> Confirm(List<Task<string?>> tasks) =>
