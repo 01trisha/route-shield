@@ -45,7 +45,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Get-ChildItem $output -File | ForEach-Object {
             $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
-            Set-Content -Path "$($_.FullName).sha256" -Value "$hash *$($_.Name)" -Encoding ascii
+            [IO.File]::WriteAllText("$($_.FullName).sha256", "$hash *$($_.Name)`n")
           }
       - uses: actions/upload-artifact@v6
         with:
