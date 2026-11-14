@@ -6,6 +6,8 @@
   <p><a href="https://github.com/01trisha/route-shield/releases">Download</a> · <a href="#first-run">First run</a> · <a href="#ip-change-notifications">Notifications</a> · <a href="#from-source">Install from source</a> · <a href="LICENSE">MIT License</a></p>
 </div>
 
+[Windows version (beta)](windows/README.md)
+
 Route Shield lives in the menu bar. Add the apps you want to track. To check the connection before opening one, use the Route Shield menu or a Route Shield Dock shortcut. The menu and the prelaunch window show your public IPv4 and IPv6 addresses and the country associated with them.
 
 - **App list.** Drag apps from Finder and Route Shield reads their bundle IDs.

@@ -1,0 +1,54 @@
+name: windows beta build
+
+on:
+  push:
+    branches:
+      - feature/windows
+      - main
+    paths:
+      - 'windows/**'
+      - '.github/workflows/windows.yml'
+      - 'LICENSE'
+  pull_request:
+    paths:
+      - 'windows/**'
+      - '.github/workflows/windows.yml'
+      - 'LICENSE'
+
+permissions:
+  contents: read
+
+jobs:
+  windows-x64:
+    runs-on: windows-2025
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+      - name: Test Windows integration
+        run: dotnet run --project windows/RouteShield.Tests -c Release
+      - name: Package portable ZIP and installer
+        shell: pwsh
+        run: |
+          $version = ([xml](Get-Content windows/RouteShield/RouteShield.csproj)).Project.PropertyGroup.Version
+          $name = "Route-Shield-$version-Windows-x64"
+          $publish = Join-Path $env:GITHUB_WORKSPACE 'build/windows-publish'
+          $output = New-Item -ItemType Directory -Force 'build/windows-assets'
+          dotnet publish windows/RouteShield -c Release -r win-x64 --self-contained -o $publish
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item LICENSE $publish
+          Compress-Archive -Path "$publish/*" -DestinationPath "$output/$name.zip"
+          $compiler = Join-Path ${env:ProgramFiles(x86)} 'Inno Setup 6/ISCC.exe'
+          & $compiler "/DAppVersion=$version" "/DPublishDir=$publish" "/O$output" "/F$name-Setup" windows/RouteShield.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Get-ChildItem $output -File | ForEach-Object {
+            $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+            Set-Content -Path "$($_.FullName).sha256" -Value "$hash *$($_.Name)" -Encoding ascii
+          }
+      - uses: actions/upload-artifact@v6
+        with:
+          name: route-shield-windows-x64
+          path: build/windows-assets/*
+          if-no-files-found: error
