@@ -131,6 +131,7 @@ internal static class WindowsApps
     {
         var result = new List<(TrackedApp, SafeProcessHandle)>();
         if (apps.Count == 0) return result;
+        var path = new StringBuilder(32768);
         foreach (var process in Process.GetProcesses())
         {
             using (process)
@@ -140,11 +141,12 @@ internal static class WindowsApps
                     if (process.Id == Environment.ProcessId || process.SessionId != Session) continue;
                     uint access = terminate ? Query | Terminate | Synchronize : Query;
                     SafeProcessHandle handle = OpenProcess(access, false, process.Id);
-                    var path = new StringBuilder(32768);
+                    path.Clear();
                     int length = path.Capacity;
                     if (!handle.IsInvalid && QueryFullProcessImageName(handle, 0, path, ref length))
                     {
-                        var matched = apps.FirstOrDefault(app => string.Equals(app.Path, path.ToString(), StringComparison.OrdinalIgnoreCase));
+                        string executable = path.ToString();
+                        var matched = apps.FirstOrDefault(app => string.Equals(app.Path, executable, StringComparison.OrdinalIgnoreCase));
                         if (matched is not null)
                         {
                             result.Add((matched, handle));

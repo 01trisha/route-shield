@@ -26,7 +26,7 @@ internal sealed class TrayApplication : ApplicationContext
     private Addresses? addresses;
     private (string? IPv4, string? IPv6) codes;
     private Release? newer;
-    private bool checkingUpdates, alertActive;
+    private bool checkingUpdates, alertActive, refreshing;
     private int connectionRevision;
 
     internal TrayApplication(Preferences settings, SynchronizationContext ui)
@@ -154,22 +154,33 @@ internal sealed class TrayApplication : ApplicationContext
 
     private async Task Refresh()
     {
-        try { await SetConnection(await connection.Read(shutdown.Token)); }
+        if (refreshing) return;
+        refreshing = true;
+        int revision = connectionRevision;
+        try
+        {
+            var samples = await connection.Read(shutdown.Token);
+            if (revision == connectionRevision) await SetConnection(samples);
+        }
         catch (OperationCanceledException) when (shutdown.IsCancellationRequested) { }
+        finally { refreshing = false; }
     }
 
     private async Task SetConnection(Addresses samples)
     {
         if (shutdown.IsCancellationRequested) return;
         int revision = ++connectionRevision;
-        if (addresses != samples) codes = default;
-        addresses = samples;
-        RenderMenu();
+        if (addresses != samples)
+        {
+            codes = default;
+            addresses = samples;
+            RenderMenu();
+        }
         if (!settings.ShowCountry) return;
         try
         {
             var result = await connection.Countries(samples, shutdown.Token);
-            if (revision != connectionRevision || shutdown.IsCancellationRequested) return;
+            if (revision != connectionRevision || shutdown.IsCancellationRequested || codes == result) return;
             codes = result;
             RenderMenu();
         }

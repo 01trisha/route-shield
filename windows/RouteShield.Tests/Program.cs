@@ -7,12 +7,27 @@ namespace RouteShield.Tests;
 internal static class Program
 {
     [STAThread]
-    private static void Main()
+    private static int Main(string[] args)
     {
-        CheckBaseline();
-        CheckVersions();
-        CheckWindows();
-        CheckTermination().GetAwaiter().GetResult();
+        if (args is ["--wait"])
+        {
+            Console.WriteLine("ready");
+            Console.ReadLine();
+            return 0;
+        }
+        try
+        {
+            CheckBaseline();
+            CheckVersions();
+            CheckWindows();
+            CheckTermination().GetAwaiter().GetResult();
+            return 0;
+        }
+        catch (Exception error)
+        {
+            Console.Error.WriteLine(error);
+            return 1;
+        }
     }
 
     private static void CheckBaseline()
@@ -98,22 +113,26 @@ internal static class Program
     private static async Task CheckTermination()
     {
         string directory = Path.Combine(Path.GetTempPath(), "route-shield-test-" + Guid.NewGuid().ToString("N"));
-        string trackedPath = Path.Combine(directory, "tracked", "ping.exe");
-        string otherPath = Path.Combine(directory, "other", "ping.exe");
+        string executable = Path.GetFileName(Environment.ProcessPath)!;
+        string trackedPath = Path.Combine(directory, "tracked", executable);
+        string otherPath = Path.Combine(directory, "other", executable);
         try
         {
             foreach (string path in new[] { trackedPath, otherPath })
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(path)!);
-                File.Copy(Path.Combine(Environment.SystemDirectory, "ping.exe"), path);
+                foreach (string file in Directory.EnumerateFiles(AppContext.BaseDirectory))
+                    File.Copy(file, Path.Combine(Path.GetDirectoryName(path)!, Path.GetFileName(file)));
             }
             var tracked = WindowsApps.Read(trackedPath) with { Name = "Tracked test app" };
-            using var first = StartProbe(trackedPath);
-            using var second = StartProbe(trackedPath);
-            using var other = StartProbe(otherPath);
+            using var first = StartChild(trackedPath);
+            using var second = StartChild(trackedPath);
+            using var other = StartChild(otherPath);
             try
             {
-                Require(!new[] { first, second, other }.Any(process => process.HasExited), "Test processes launched");
+                foreach (var process in new[] { first, second, other })
+                    Require(await process.StandardOutput.ReadLineAsync().WaitAsync(TimeSpan.FromSeconds(10)) == "ready",
+                        "Test process launched");
                 Require(WindowsApps.IsAnyRunning([tracked]), "Tracked app opened directly is found");
                 var closed = await WindowsApps.Close([tracked]);
                 Require(closed.SequenceEqual(["Tracked test app"]), "Confirmed instances are grouped by app");
@@ -131,9 +150,9 @@ internal static class Program
         finally { Directory.Delete(directory, recursive: true); }
     }
 
-    private static Process StartProbe(string path) => Process.Start(new ProcessStartInfo(path, "-t 127.0.0.1")
+    private static Process StartChild(string path) => Process.Start(new ProcessStartInfo(path, "--wait")
     {
-        UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true
+        UseShellExecute = false, CreateNoWindow = true, RedirectStandardOutput = true, RedirectStandardInput = true
     })!;
 
     private static void Require(bool condition, string message)
