@@ -6,3 +6,6 @@ xcuserdata/
 .env
 .env.*
 !.env.example
+/windows/**/bin/
+/windows/**/obj/
+/windows/.vs/
