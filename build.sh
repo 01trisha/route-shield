@@ -21,6 +21,7 @@ cp "$project_dir/.env.example" "$app/Contents/Resources/.env.example"
 cp "$project_dir/assets/RouteShield.icns" "$app/Contents/Resources/RouteShield.icns"
 cp -R "$project_dir/src/en.lproj" "$app/Contents/Resources/en.lproj"
 cp "$project_dir/LICENSE" "$app/Contents/Resources/LICENSE"
+cp "$project_dir/RELEASE_NOTES.md" "$app/Contents/Resources/RELEASE_NOTES.md"
 
 xcrun clang++ -std=c++17 -fobjc-arc -Wall -Wextra -Werror -mmacosx-version-min=13.0 \
     "${arch_args[@]+"${arch_args[@]}"}" \

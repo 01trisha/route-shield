@@ -444,6 +444,24 @@ static NSString *CurrentAppVersion() {
     return [NSBundle.mainBundle objectForInfoDictionaryKey:@"CFBundleShortVersionString"];
 }
 
+static NSString *const LastSeenVersionKey = @"LastSeenAppVersion";
+
+static NSString *ReleaseNotesForLanguage(NSString *document, BOOL english) {
+    NSString *heading = english ? @"## English" : @"## Русский";
+    NSMutableArray<NSString *> *lines = [NSMutableArray array];
+    BOOL collecting = NO;
+    for (NSString *line in [document componentsSeparatedByCharactersInSet:NSCharacterSet.newlineCharacterSet]) {
+        if ([line hasPrefix:@"## "]) {
+            if (collecting) break;
+            collecting = [line isEqualToString:heading];
+        } else if (collecting && [line hasPrefix:@"- "]) {
+            NSString *entry = [[line substringFromIndex:2] stringByReplacingOccurrencesOfString:@"`" withString:@""];
+            [lines addObject:[@"• " stringByAppendingString:entry]];
+        }
+    }
+    return [lines componentsJoinedByString:@"\n\n"];
+}
+
 static NSString *AvailableUpdateTag() {
     NSString *tag = [NSUserDefaults.standardUserDefaults stringForKey:LatestReleaseTagKey];
     NSString *latest = ReleaseVersion(tag);
@@ -1046,9 +1064,42 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     }
     if ([settings boolForKey:WelcomeCompletedKey]) {
         [self startMenuBar];
+        [self showReleaseNotesAfterUpdate];
     } else {
         [self showWelcome];
     }
+}
+
+- (void)showReleaseNotesAfterUpdate {
+    NSUserDefaults *settings = InterfacePreferences();
+    NSString *version = ReleaseVersion(CurrentAppVersion());
+    // Versions without this preference predate the release notes window.
+    NSString *previous = ReleaseVersion([settings stringForKey:LastSeenVersionKey]) ?: @"1.4.1";
+    if (!version || [version compare:previous options:NSNumericSearch] != NSOrderedDescending) return;
+
+    NSURL *resource = [NSBundle.mainBundle URLForResource:@"RELEASE_NOTES" withExtension:@"md"];
+    NSString *document = resource ? [NSString stringWithContentsOfURL:resource encoding:NSUTF8StringEncoding error:nil] : nil;
+    NSString *notes = ReleaseNotesForLanguage(document, UsesEnglish());
+    if (!notes.length) return;
+    NSAlert *alert = [[NSAlert alloc] init];
+    alert.messageText = [NSString stringWithFormat:L(@"Что нового в Route Shield %@"), version];
+    [alert addButtonWithTitle:@"OK"];
+    NSScrollView *scroll = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 460, 290)];
+    scroll.hasVerticalScroller = YES;
+    scroll.borderType = NSBezelBorder;
+    NSTextView *text = [[NSTextView alloc] initWithFrame:scroll.contentView.bounds];
+    text.editable = NO;
+    text.verticallyResizable = YES;
+    text.autoresizingMask = NSViewWidthSizable;
+    text.textContainer.widthTracksTextView = YES;
+    text.textContainerInset = NSMakeSize(10, 10);
+    text.font = [NSFont systemFontOfSize:NSFont.systemFontSize];
+    text.string = notes;
+    scroll.documentView = text;
+    alert.accessoryView = scroll;
+    [NSApp activateIgnoringOtherApps:YES];
+    [alert runModal];
+    [settings setObject:version forKey:LastSeenVersionKey];
 }
 
 - (void)startMenuBar {
@@ -1130,6 +1181,11 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
         NSString *title = url ? AppName(url) : [identifier stringByAppendingString:L(@" (не найдено)")];
         NSMenuItem *item = [self addItem:title action:url ? @selector(selectApp:) : nullptr toMenu:menu];
         item.representedObject = identifier;
+        if (url) {
+            NSImage *icon = [[NSWorkspace.sharedWorkspace iconForFile:url.path] copy];
+            icon.size = NSMakeSize(14, 14);
+            item.image = icon;
+        }
     }
 
     [menu addItem:NSMenuItem.separatorItem];
@@ -1309,6 +1365,7 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     [settings setInteger:self.welcomeNotificationDetails forKey:NotificationDetailsKey];
     [settings setBool:self.welcomeForceCloseEnabled forKey:ForceCloseOnIPChangeKey];
     [settings setBool:self.welcomeSafeClose forKey:SafeCloseKey];
+    [settings setObject:CurrentAppVersion() forKey:LastSeenVersionKey];
     [settings setBool:YES forKey:WelcomeCompletedKey];
     NSWindow *window = self.welcomeWindow;
     self.welcomeWindow = nil;
@@ -1334,7 +1391,7 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
 
 - (void)showSettings {
     if (!self.settingsWindow) {
-        self.settingsWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 530, 550)
+        self.settingsWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 530, 575)
             styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable backing:NSBackingStoreBuffered defer:NO];
         self.settingsWindow.releasedWhenClosed = NO;
         [self.settingsWindow center];
@@ -1406,18 +1463,21 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     NSButton *login = [NSButton checkboxWithTitle:L(@"Запускать при входе")
         target:self action:@selector(toggleLogin)];
     login.state = status == SMAppServiceStatusEnabled ? NSControlStateValueOn : NSControlStateValueOff;
-    NSMutableArray<NSView *> *controls = [@[
-        updates, [self languageRow], connection,
+    NSTextField *startup = [NSTextField labelWithString:L(@"Автозапуск")];
+    startup.font = [NSFont boldSystemFontOfSize:NSFont.systemFontSize];
+    NSMutableArray<NSView *> *controls = [@[updates, [self languageRow], startup, login] mutableCopy];
+    if (status == SMAppServiceStatusRequiresApproval) {
+        login.enabled = NO;
+        [controls addObject:[NSButton buttonWithTitle:L(@"Разрешить запуск при входе…")
+            target:self action:@selector(toggleLogin)]];
+    }
+    [controls addObjectsFromArray:@[
+        connection,
         [self connectionCheckbox:L(@"Показывать IPv4") key:ShowIPv4Key],
         [self connectionCheckbox:L(@"Показывать IPv6") key:ShowIPv6Key],
         [self connectionCheckbox:L(@"Показывать страну") key:ShowCountryKey],
-        login, closing, ipClosing, sleepClosing, CloseModeDescription(), sleepDetail
-    ] mutableCopy];
-    if (status == SMAppServiceStatusRequiresApproval) {
-        login.enabled = NO;
-        [controls insertObject:[NSButton buttonWithTitle:L(@"Разрешить запуск при входе…")
-            target:self action:@selector(toggleLogin)] atIndex:7];
-    }
+        closing, ipClosing, sleepClosing, CloseModeDescription(), sleepDetail
+    ]];
     [controls addObject:[NSButton buttonWithTitle:L(@"Открыть конфигурационный файл…")
         target:self action:@selector(editConfig)]];
     return controls;

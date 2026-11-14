@@ -19,9 +19,14 @@ Route Shield lives in the menu bar. Add the apps you want to track. To check the
 
 ## Installation
 
+- [macOS](#macos). Stable build for Apple silicon and Intel.
+- [Windows 11 x64 (beta)](#windows-11-x64-beta). Test ZIP and installer.
+
+### macOS
+
 **Requires macOS 13 Ventura or later.** The release build supports both Apple silicon and Intel Macs. IP checks use an internet connection and the system copy of `curl` included with macOS. To build from source, install Git and Xcode Command Line Tools with the macOS 13 SDK or later. A full Xcode installation also works. The build uses only system tools and the Apple toolchain. [Install the Command Line Tools](https://developer.apple.com/documentation/xcode/installing-the-command-line-tools/)
 
-### Prebuilt app
+#### Prebuilt app
 
 1. Download `Route-Shield-v…-macOS-universal.dmg` from the **Assets** list in [GitHub Releases](https://github.com/01trisha/route-shield/releases).
 2. Open the DMG and drag **Route Shield.app** onto the **Applications** shortcut in the disk image. If you downloaded the ZIP, extract it and move the app to **Applications** manually.
@@ -31,7 +36,7 @@ Each download has a matching SHA-256 checksum.
 
 The release build uses an ad hoc signature. If Gatekeeper blocks the downloaded copy, use the source installation below. Distribution with Apple notarization requires a Developer ID signature. [Apple's notarization documentation](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution)
 
-### From source
+#### From source
 
 On a new Mac, run `xcode-select --install` and finish the installation in the macOS dialog. If the tools are already installed, proceed with the commands below.
 
@@ -44,6 +49,15 @@ cd route-shield
 The script checks the requirements, builds the app, copies it to `/Applications/Route Shield.app`, and opens it. If the Command Line Tools are missing, the script offers to install them through macOS. Run the script again once the tools are installed.
 
 If your account cannot write to `/Applications`, run `./install.sh --user` to install the app in `~/Applications`. Use `--no-open` to install it and open it later.
+
+### Windows 11 x64 (beta)
+
+1. Open the [Windows test builds](https://github.com/01trisha/route-shield/actions/workflows/windows.yml?query=branch%3Afeature%2Fwindows) and select the latest successful run on `feature/windows`.
+2. Sign in to GitHub, download **route-shield-windows-x64** from **Artifacts**, and extract it.
+3. Run `Setup.exe` for a per-user installation, or extract the entire inner ZIP and launch `RouteShield.exe`. Both builds include .NET.
+4. After first launch, look for the Route Shield icon near the clock in the notification area.
+
+[Windows instructions and source builds](windows/README.md)
 
 ## First run
 
@@ -95,7 +109,7 @@ If app closing is enabled and Route Shield closes apps after an IP change, a sep
 
 When an update is available, a message appears at the bottom of the menu. Click it to open **General** and focus **Download Update…**, which opens the release page with DMG and ZIP downloads. The cross hides the message for that version. If system notifications are enabled, Route Shield sends a notification when it finds an update and then about every two days. Clicking the notification also opens Settings.
 
-Before installing an update, quit Route Shield from its menu. Replace `Route Shield.app` in **Applications** with the new copy or run the source installer. Your app list and preferences are stored outside the app bundle and carry over.
+Before installing an update, quit Route Shield from its menu. Replace `Route Shield.app` in **Applications** with the new copy or run the source installer. Your app list and preferences are stored outside the app bundle and carry over. The first launch after an update shows **What’s New** in your selected language. Release text comes from [RELEASE_NOTES.md](RELEASE_NOTES.md).
 
 ## How IP checks work
 
