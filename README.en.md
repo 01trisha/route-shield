@@ -74,7 +74,7 @@ Click the <img src="assets/screenshots/menu-bar-icon.png" width="26" alt="Route 
 
 Choose **Add Apps…** and use **Choose App…** to select one or more `.app` bundles, or drag them from Finder. Click the red cross on an icon to remove that app from the list.
 
-<img src="assets/screenshots/en-add-apps.png" width="550" alt="Add Apps window with a drop area and icons for ChatGPT, Claude, Gemini, and VS Code">
+<img src="assets/screenshots/en-add-apps.png" width="550" alt="Add Apps window with the Choose App button and icons for ChatGPT, Claude, Gemini, and VS Code">
 
 ### Check your connection before opening an app
 
@@ -87,6 +87,8 @@ You can also open tracked apps as usual from Finder, Spotlight, or their origina
 To see the prelaunch window when opening apps from the Dock, choose **Create or Update Dock Shortcuts**. Drag the shortcuts from `~/Applications/Route Shield` into the Dock in place of the original icons.
 
 Choose **Settings…** from the Route Shield menu. In **General**, choose which connection details appear in the menu and the prelaunch window, change the language, or enable launch at login. Under **Closing apps**, set separate modes for IP changes and sleep. Sleep closing is off by default. The **About Us** tab links to the GitHub repository.
+
+<img src="assets/screenshots/en-settings.png" width="530" alt="Route Shield 2.0 settings with startup and closing modes for IP changes and sleep">
 
 The app list lives at `~/Library/Application Support/VPN Guard/.env`. To edit it manually, choose **Settings… → General → Open Configuration File…**. Remove IDs from the `APPS=` line or add new IDs separated by commas. The template comments are in English.
 
