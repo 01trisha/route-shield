@@ -15,7 +15,7 @@ internal sealed class TrayApplication : ApplicationContext
     private readonly CancellationTokenSource shutdown = new();
     private readonly NotifyIcon icon;
     private readonly Icon artwork;
-    private readonly ContextMenuStrip menu = new() { ShowImageMargin = true };
+    private readonly ContextMenuStrip menu = new() { ShowImageMargin = true, ImageScalingSize = new Size(14, 14) };
     private readonly Timer updateTimer = new() { Interval = 60000 };
     private readonly Timer alertTimer = new() { Interval = 10000 };
     private readonly Queue<(string Title, string Body, Action? Click)> alerts = new();
@@ -81,14 +81,28 @@ internal sealed class TrayApplication : ApplicationContext
             var previous = (settings.Language, settings.Notify, settings.Details, settings.ForceClose, settings.ClosingMode);
             (settings.Language, settings.Notify, settings.Details, settings.ForceClose, settings.ClosingMode) = welcome.Choice;
             settings.WelcomeCompleted = true;
+            var previousVersion = settings.LastSeenAppVersion;
+            settings.LastSeenAppVersion = Updates.Current;
             if (!Save())
             {
                 (settings.Language, settings.Notify, settings.Details, settings.ForceClose, settings.ClosingMode) = previous;
                 settings.WelcomeCompleted = false;
+                settings.LastSeenAppVersion = previousVersion;
                 ExitThread();
                 return;
             }
             RenderMenu();
+        }
+        else if (ReleaseNotes.IsUpgrade(settings.LastSeenAppVersion, Updates.Current))
+        {
+            string notes = ReleaseNotes.Read(settings.Language);
+            if (notes.Length > 0)
+            {
+                using var window = new ReleaseNotesWindow(settings, artwork, notes);
+                Show(window);
+                settings.LastSeenAppVersion = Updates.Current;
+                Save();
+            }
         }
         monitor.Apply();
         RemindAboutUpdate();

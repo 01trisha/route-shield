@@ -9,11 +9,13 @@ on:
       - 'windows/**'
       - '.github/workflows/windows.yml'
       - 'LICENSE'
+      - 'RELEASE_NOTES.md'
   pull_request:
     paths:
       - 'windows/**'
       - '.github/workflows/windows.yml'
       - 'LICENSE'
+      - 'RELEASE_NOTES.md'
 
 permissions:
   contents: read

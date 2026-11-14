@@ -204,7 +204,7 @@ internal sealed class SettingsWindow : ShieldWindow
         Func<Task> update, Action<string> open, Action<string> error) : base(settings, artwork)
     {
         Text = T("Route Shield Settings", "Настройки Route Shield");
-        ClientSize = new Size(595, 610);
+        ClientSize = new Size(595, 635);
         MinimumSize = new Size(505, 400);
         var general = AddTab(T("General", "Основные"));
         var notifications = AddTab(T("Notifications", "Уведомления"));
@@ -213,11 +213,6 @@ internal sealed class SettingsWindow : ShieldWindow
         updateButton = Button(T("Check for Updates…", "Проверить обновления…"),
             async (sender, _) => await RunButton((Button)sender!, update));
         general.Controls.Add(updateButton);
-        general.Controls.Add(Caption(T("Show connection details", "Показывать информацию о соединении")));
-        four = Check("IPv4", settings.ShowIPv4);
-        six = Check("IPv6", settings.ShowIPv6);
-        country = Check(T("Connection country", "Страна соединения"), settings.ShowCountry);
-        general.Controls.AddRange([four, six, country]);
         general.Controls.Add(Caption(T("Interface language", "Язык интерфейса")));
         language = Picker(["English", "Русский"], settings.Language == "ru" ? 1 : 0);
         general.Controls.Add(language);
@@ -225,7 +220,14 @@ internal sealed class SettingsWindow : ShieldWindow
         try { startup.Checked = WindowsApps.StartsAtLogin; }
         catch (Exception problem) when (TrayApplication.IsFileError(problem)) { startup.Enabled = false; }
         close = Check(T("Close apps on IP changes", "Закрывать приложения при смене IP"), settings.ForceClose);
-        general.Controls.Add(startup);
+        var startupHeading = Caption(T("Startup", "Автозапуск"));
+        startupHeading.Font = new Font(Font, FontStyle.Bold);
+        general.Controls.AddRange([startupHeading, startup]);
+        general.Controls.Add(Caption(T("Show connection details", "Показывать информацию о соединении")));
+        four = Check("IPv4", settings.ShowIPv4);
+        six = Check("IPv6", settings.ShowIPv6);
+        country = Check(T("Connection country", "Страна соединения"), settings.ShowCountry);
+        general.Controls.AddRange([four, six, country]);
         sleep = Check(T("Close apps when the computer goes to sleep", "Закрывать приложения при уходе в сон"), settings.CloseOnSleep);
         mode = CloseModePicker(settings.ClosingMode);
         var closing = Caption(T("Closing apps", "Закрытие приложений"));
@@ -295,6 +297,29 @@ internal sealed class SettingsWindow : ShieldWindow
         button.Enabled = false;
         try { await action(); }
         finally { if (!button.IsDisposed) button.Enabled = true; }
+    }
+}
+
+internal sealed class ReleaseNotesWindow : ShieldWindow
+{
+    internal ReleaseNotesWindow(Preferences settings, Icon artwork, string notes) : base(settings, artwork)
+    {
+        Text = T($"What’s New in Route Shield {Updates.Current}", $"Что нового в Route Shield {Updates.Current}");
+        ClientSize = new Size(570, 390);
+        MinimumSize = new Size(420, 315);
+        var body = new TextBox
+        {
+            Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, Text = notes,
+            ScrollBars = ScrollBars.Vertical, BackColor = SystemColors.Window
+        };
+        var footer = Footer();
+        var done = Button("OK", (_, _) => Close());
+        footer.Controls.Add(done);
+        Controls.Add(body);
+        Controls.Add(footer);
+        AcceptButton = done;
+        CancelButton = done;
+        ActiveControl = done;
     }
 }
 

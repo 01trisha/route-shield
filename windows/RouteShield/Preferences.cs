@@ -14,6 +14,7 @@ internal sealed class Preferences
     internal static string FilePath => Path.Combine(Folder, "settings.json");
 
     public bool WelcomeCompleted { get; set; }
+    public string? LastSeenAppVersion { get; set; }
     public string Language { get; set; } = System.Globalization.CultureInfo.CurrentUICulture.TwoLetterISOLanguageName == "ru" ? "ru" : "en";
     public bool ShowIPv4 { get; set; } = true;
     public bool ShowIPv6 { get; set; } = true;

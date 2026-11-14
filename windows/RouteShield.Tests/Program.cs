@@ -27,6 +27,7 @@ internal static class Program
         {
             CheckBaseline();
             CheckVersions();
+            CheckReleaseNotes();
             CheckWindows();
             CheckUpdateSettings();
             Task.Run(CheckTermination).GetAwaiter().GetResult();
@@ -64,6 +65,20 @@ internal static class Program
         Require(Release.Available("windows-v99.0.0-beta.2")?.DisplayVersion == "99.0.0-beta.2",
             "Available Windows beta displays its full version");
         Require(Release.Parse("windows-v1.0.0-beta.2147483648") is null, "Out-of-range beta numbers are rejected");
+    }
+
+    private static void CheckReleaseNotes()
+    {
+        Require(!ReleaseNotes.IsUpgrade("1.0.0-beta.1", "1.0.0-beta.1"), "The same build does not reopen release notes");
+        Require(!ReleaseNotes.IsUpgrade("1.1.0", "1.0.0-beta.2"), "Downgrades do not open release notes");
+        Require(ReleaseNotes.IsUpgrade(null, "1.0.0-beta.2"), "Existing beta installations can see notes on their next upgrade");
+        Require(ReleaseNotes.IsUpgrade("1.0.0-beta.1", "1.0.0-beta.2"), "The next beta opens release notes");
+        string english = ReleaseNotes.Read("en");
+        string russian = ReleaseNotes.Read("ru");
+        int enEntries = english.Split('•').Length;
+        int ruEntries = russian.Split('•').Length;
+        Require(enEntries > 1 && enEntries == ruEntries && english != russian &&
+            !english.Contains("##") && !russian.Contains("##"), "The embedded release notes have matching English and Russian sections");
     }
 
     private static void CheckWindows()

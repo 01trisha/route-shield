@@ -13,5 +13,6 @@
   <ItemGroup>
     <InternalsVisibleTo Include="RouteShield.Tests" />
     <EmbeddedResource Include="CountryNames.json" />
+    <EmbeddedResource Include="../../RELEASE_NOTES.md" LogicalName="RouteShield.ReleaseNotes.md" />
   </ItemGroup>
 </Project>

@@ -10,9 +10,11 @@ Under **General → Closing apps**, choose independent modes for IP changes and 
 
 ## Try a build
 
-Requires Windows 11 on x64. Download the ZIP or the per-user installer from the Windows build artifact. For the ZIP, extract the entire archive and run `RouteShield.exe`. The packages include .NET. First launch walks through language, IP notifications and choosing a closing mode. With a portable build use the same folder across updates to keep desktop and startup shortcuts pointing at it.
+Requires Windows 11 on x64. Download the ZIP or the per-user installer from [a successful Windows beta build](https://github.com/01trisha/route-shield/actions/workflows/windows.yml?query=branch%3Afeature%2Fwindows). Sign in to GitHub to download **route-shield-windows-x64** under **Artifacts**, then extract that archive. For the ZIP, extract the entire archive and run `RouteShield.exe`. The packages include .NET. First launch walks through language, IP notifications and choosing a closing mode. With a portable build use the same folder across updates to keep desktop and startup shortcuts pointing at it.
 
 Settings and tracked apps are stored in `%LOCALAPPDATA%\Route Shield\settings.json` and survive updates. The **General** tab includes an action to open this file. Close Route Shield before editing it. Updates are checked manually and at most once a day in the background. Click the update message at the bottom of the tray menu or the system notification to focus **Download Update…** in **General**. The button opens the GitHub release page. The cross hides the tray message for the current version. System reminders repeat about every two days.
+
+After updating, the first launch shows **What’s New** in the selected language. The text comes from [RELEASE_NOTES.md](../RELEASE_NOTES.md).
 
 ## Build and verify
 
