@@ -1,0 +1,24 @@
+name: capture windows screenshots
+on:
+  push:
+    branches: [codex/windows-screenshots]
+permissions:
+  contents: read
+jobs:
+  capture:
+    runs-on: windows-11-arm
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '10.0.x'
+      - run: |
+          Get-ComputerInfo -Property WindowsProductName,OsName,OsVersion
+          dotnet run --project windows/RouteShield.Tests -c Release -- --capture screenshots
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@v6
+        with:
+          name: route-shield-windows-screenshots
+          path: screenshots/*
+          if-no-files-found: error

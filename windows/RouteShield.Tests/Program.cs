@@ -17,6 +17,11 @@ internal static class Program
         }
         try
         {
+            if (args is ["--capture", var folder])
+            {
+                Screenshots.Capture(folder);
+                return 0;
+            }
             CheckBaseline();
             CheckVersions();
             CheckWindows();
