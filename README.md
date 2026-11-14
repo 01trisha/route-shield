@@ -52,7 +52,7 @@ cd route-shield
 
 ### Windows 11 x64 (бета)
 
-1. Откройте [бета-релиз для Windows](https://github.com/01trisha/route-shield/releases/tag/windows-v1.0.0-beta.2) и скачайте установщик `*-Setup.exe` или ZIP из раздела **Assets**.
+1. Откройте [бета-релиз для Windows](https://github.com/01trisha/route-shield/releases/tag/windows-v2.0.0-beta.1) и скачайте установщик `*-Setup.exe` или ZIP из раздела **Assets**.
 2. Запустите установщик для текущего пользователя или распакуйте ZIP целиком и запустите `RouteShield.exe`. .NET уже входит в обе сборки.
 3. После первого запуска ищите значок Route Shield в области уведомлений рядом с часами.
 
