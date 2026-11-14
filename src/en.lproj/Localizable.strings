@@ -105,3 +105,16 @@
 "%@ — такой ярлык уже есть." = "%@: a shortcut with that name already exists.";
 "не удалось сохранить или подписать ярлык." = "could not save or sign the shortcut.";
 "Часть ярлыков недоступна" = "Some shortcuts could not be created";
+"Экстренное быстрее разрывает соединения, но может потерять несохранённые данные. Безопасное даёт приложению сохранить изменения, но оно может ждать ответа или остаться открытым." = "Emergency closing ends connections sooner but can discard unsaved changes. Safe closing lets the app save changes, but it may wait for input or stay open.";
+"Экстренное" = "Emergency";
+"Безопасное" = "Safe";
+"Закрытие приложений" = "Closing apps";
+"Route Shield может закрыть приложения из списка при смене внешнего IP, например после подключения или отключения VPN." = "Route Shield can close tracked apps when the public IP changes, for example when a VPN connects or disconnects.";
+"Закрывать приложения при смене IP" = "Close apps on IP changes";
+"Закрывать приложения при уходе в сон" = "Close apps when the computer goes to sleep";
+"Выбрать приложение…" = "Choose App…";
+"Добавить" = "Add";
+"Выберите приложения (.app)." = "Choose applications (.app).";
+"Режим закрытия при смене IP" = "Closing mode on IP change";
+"Режим закрытия при уходе в сон" = "Closing mode on sleep";
+"При закрытии крышки настройка срабатывает, если компьютер уходит в сон. Приложение может не успеть закрыться до сна." = "Closing the lid triggers this setting when the computer goes to sleep. Apps may need more time than the system allows.";

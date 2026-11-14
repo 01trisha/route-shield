@@ -25,7 +25,7 @@ cp "$project_dir/LICENSE" "$app/Contents/Resources/LICENSE"
 xcrun clang++ -std=c++17 -fobjc-arc -Wall -Wextra -Werror -mmacosx-version-min=13.0 \
     "${arch_args[@]+"${arch_args[@]}"}" \
     -framework AppKit -framework ImageIO -framework Network -framework ServiceManagement \
-    -framework SystemConfiguration -framework UserNotifications \
+    -framework SystemConfiguration -framework UserNotifications -framework UniformTypeIdentifiers \
     "$project_dir/src/main.mm" -o "$app/Contents/MacOS/VPNGuard"
 /usr/bin/codesign --force --sign - "$app"
 

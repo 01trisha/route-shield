@@ -4,6 +4,7 @@
 #import <ServiceManagement/ServiceManagement.h>
 #import <SystemConfiguration/SystemConfiguration.h>
 #import <UserNotifications/UserNotifications.h>
+#import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #include <arpa/inet.h>
 #include <cerrno>
 #include <cstdio>
@@ -17,6 +18,9 @@ static NSString *const RepositoryURL = @"https://github.com/01trisha/route-shiel
 static NSString *const TargetBundleIDKey = @"VPNGuardTargetBundleIdentifier";
 static NSString *const NotifyIPChangesKey = @"NotifyIPChanges";
 static NSString *const ForceCloseOnIPChangeKey = @"ForceCloseOnIPChange";
+static NSString *const CloseOnSleepKey = @"CloseOnSleep";
+static NSString *const SafeSleepCloseKey = @"SafeSleepClose";
+static NSString *const SafeCloseKey = @"SafeClose";
 static NSString *const LanguageKey = @"InterfaceLanguage";
 static NSString *const WelcomeCompletedKey = @"WelcomeCompleted";
 static NSString *const ShowIPv4Key = @"ShowIPv4";
@@ -711,6 +715,23 @@ static NSTabViewItem *SettingsTab(NSString *identifier, NSString *title, NSArray
     return tab;
 }
 
+static NSTextField *CloseModeDescription() {
+    NSTextField *label = [NSTextField wrappingLabelWithString:L(@"Экстренное быстрее разрывает соединения, но может потерять несохранённые данные. Безопасное даёт приложению сохранить изменения, но оно может ждать ответа или остаться открытым.")];
+    label.preferredMaxLayoutWidth = 460;
+    label.textColor = NSColor.secondaryLabelColor;
+    return label;
+}
+
+static NSPopUpButton *CloseModePicker(BOOL safe, id target, SEL action, NSString *label) {
+    NSPopUpButton *mode = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+    [mode addItemsWithTitles:@[L(@"Экстренное"), L(@"Безопасное")]];
+    [mode selectItemAtIndex:safe ? 1 : 0];
+    mode.target = target;
+    mode.action = action;
+    [mode setAccessibilityLabel:label];
+    return mode;
+}
+
 typedef void (^IPChangeCompletion)(NSString *, NSString *);
 
 @interface IPMonitor : NSObject
@@ -965,6 +986,8 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
 @property BOOL welcomeNotificationsEnabled;
 @property NotificationDetails welcomeNotificationDetails;
 @property BOOL welcomeForceCloseEnabled;
+@property BOOL welcomeSafeClose;
+@property (strong) id sleepObserver;
 @property (strong) NSBox *dropBox;
 @property (strong) NSTextField *dropStatus;
 @property (strong) NSCollectionView *trackedAppsGrid;
@@ -1027,6 +1050,13 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     self.statusItem.menu = [[NSMenu alloc] initWithTitle:GuardName];
     self.statusItem.menu.delegate = self;
     self.statusItem.menu.autoenablesItems = NO;
+    __weak GuardApp *weakSelf = self;
+    self.sleepObserver = [NSWorkspace.sharedWorkspace.notificationCenter
+        addObserverForName:NSWorkspaceWillSleepNotification object:nil queue:NSOperationQueue.mainQueue
+        usingBlock:^(NSNotification *notification) {
+            (void)notification;
+            [weakSelf closeAppsForSleep];
+        }];
     [self updateIPMonitoring];
     [self updateAvailableReleaseIndicator];
     [self scheduleUpdateCheck];
@@ -1126,7 +1156,8 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     self.welcomeNotificationsEnabled = [settings boolForKey:NotifyIPChangesKey];
     self.welcomeNotificationDetails = (NotificationDetails)[settings integerForKey:NotificationDetailsKey];
     self.welcomeForceCloseEnabled = [settings boolForKey:ForceCloseOnIPChangeKey];
-    self.welcomeWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 530, 290)
+    self.welcomeSafeClose = [settings boolForKey:SafeCloseKey];
+    self.welcomeWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 530, 350)
         styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable backing:NSBackingStoreBuffered defer:NO];
     self.welcomeWindow.releasedWhenClosed = NO;
     self.welcomeWindow.delegate = self;
@@ -1159,12 +1190,13 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
             break;
         }
         case WelcomeStepForceClose: {
-            title = L(@"Принудительное завершение приложений");
-            description = L(@"Route Shield завершит запущенные приложения из списка при смене внешнего IP, в том числе после подключения или отключения VPN. Несохранённые данные могут потеряться.");
-            NSButton *forceClose = [NSButton checkboxWithTitle:L(@"Принудительно закрывать приложения при смене IP")
+            title = L(@"Закрытие приложений");
+            description = L(@"Route Shield может закрыть приложения из списка при смене внешнего IP, например после подключения или отключения VPN.");
+            NSButton *forceClose = [NSButton checkboxWithTitle:L(@"Закрывать приложения при смене IP")
                 target:self action:@selector(changeWelcomeForceClose:)];
             forceClose.state = self.welcomeForceCloseEnabled ? NSControlStateValueOn : NSControlStateValueOff;
-            options = @[forceClose];
+            options = @[forceClose, CloseModePicker(self.welcomeSafeClose, self, @selector(changeWelcomeCloseMode:), L(@"Режим закрытия при смене IP")),
+                CloseModeDescription()];
             break;
         }
     }
@@ -1201,6 +1233,10 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
 
 - (void)changeWelcomeNotificationDetails:(NSPopUpButton *)sender {
     self.welcomeNotificationDetails = (NotificationDetails)sender.indexOfSelectedItem;
+}
+
+- (void)changeWelcomeCloseMode:(NSPopUpButton *)sender {
+    self.welcomeSafeClose = sender.indexOfSelectedItem == 1;
 }
 
 - (void)changeWelcomeForceClose:(NSButton *)sender {
@@ -1242,6 +1278,7 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     [settings setBool:self.welcomeNotificationsEnabled forKey:NotifyIPChangesKey];
     [settings setInteger:self.welcomeNotificationDetails forKey:NotificationDetailsKey];
     [settings setBool:self.welcomeForceCloseEnabled forKey:ForceCloseOnIPChangeKey];
+    [settings setBool:self.welcomeSafeClose forKey:SafeCloseKey];
     [settings setBool:YES forKey:WelcomeCompletedKey];
     NSWindow *window = self.welcomeWindow;
     self.welcomeWindow = nil;
@@ -1267,7 +1304,7 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
 
 - (void)showSettings {
     if (!self.settingsWindow) {
-        self.settingsWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 530, 435)
+        self.settingsWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 530, 550)
             styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable backing:NSBackingStoreBuffered defer:NO];
         self.settingsWindow.releasedWhenClosed = NO;
         [self.settingsWindow center];
@@ -1295,12 +1332,25 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     updates.spacing = 12;
     NSTextField *connection = [NSTextField labelWithString:L(@"Информация о соединении")];
     connection.font = [NSFont boldSystemFontOfSize:NSFont.systemFontSize];
-    NSButton *forceClose = [NSButton checkboxWithTitle:L(@"Принудительно закрывать приложения при смене IP")
+    NSButton *forceClose = [NSButton checkboxWithTitle:L(@"Закрывать приложения при смене IP")
         target:self action:@selector(toggleForceClose)];
     forceClose.state = [NSUserDefaults.standardUserDefaults boolForKey:ForceCloseOnIPChangeKey]
         ? NSControlStateValueOn : NSControlStateValueOff;
-    NSTextField *detail = [NSTextField labelWithString:L(@"Несохранённые данные могут потеряться.")];
-    detail.textColor = NSColor.secondaryLabelColor;
+    NSUserDefaults *settings = NSUserDefaults.standardUserDefaults;
+    NSTextField *closing = [NSTextField labelWithString:L(@"Закрытие приложений")];
+    closing.font = [NSFont boldSystemFontOfSize:NSFont.systemFontSize];
+    NSButton *sleep = [NSButton checkboxWithTitle:L(@"Закрывать приложения при уходе в сон")
+        target:self action:@selector(toggleCloseOnSleep:)];
+    sleep.state = [settings boolForKey:CloseOnSleepKey] ? NSControlStateValueOn : NSControlStateValueOff;
+    NSStackView *ipClosing = [NSStackView stackViewWithViews:@[forceClose,
+        CloseModePicker([settings boolForKey:SafeCloseKey], self, @selector(changeCloseMode:), L(@"Режим закрытия при смене IP"))]];
+    ipClosing.spacing = 12;
+    NSStackView *sleepClosing = [NSStackView stackViewWithViews:@[sleep,
+        CloseModePicker([settings boolForKey:SafeSleepCloseKey], self, @selector(changeSleepCloseMode:), L(@"Режим закрытия при уходе в сон"))]];
+    sleepClosing.spacing = 12;
+    NSTextField *sleepDetail = [NSTextField wrappingLabelWithString:L(@"При закрытии крышки настройка срабатывает, если компьютер уходит в сон. Приложение может не успеть закрыться до сна.")];
+    sleepDetail.preferredMaxLayoutWidth = 460;
+    sleepDetail.textColor = NSColor.secondaryLabelColor;
     SMAppServiceStatus status = SMAppService.mainAppService.status;
     NSButton *login = [NSButton checkboxWithTitle:L(@"Запускать при входе")
         target:self action:@selector(toggleLogin)];
@@ -1310,7 +1360,7 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
         [self connectionCheckbox:L(@"Показывать IPv4") key:ShowIPv4Key],
         [self connectionCheckbox:L(@"Показывать IPv6") key:ShowIPv6Key],
         [self connectionCheckbox:L(@"Показывать страну") key:ShowCountryKey],
-        login, forceClose, detail
+        login, closing, ipClosing, sleepClosing, CloseModeDescription(), sleepDetail
     ] mutableCopy];
     if (status == SMAppServiceStatusRequiresApproval) {
         login.enabled = NO;
@@ -1537,7 +1587,8 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
         heading.font = [NSFont boldSystemFontOfSize:17];
         NSTextField *detail = [NSTextField labelWithString:L(@"Можно выбрать несколько значков в Finder.")];
         detail.textColor = NSColor.secondaryLabelColor;
-        NSStackView *labels = [NSStackView stackViewWithViews:@[heading, detail]];
+        NSButton *choose = [NSButton buttonWithTitle:L(@"Выбрать приложение…") target:self action:@selector(chooseApps)];
+        NSStackView *labels = [NSStackView stackViewWithViews:@[heading, detail, choose]];
         labels.orientation = NSUserInterfaceLayoutOrientationVertical;
         labels.alignment = NSLayoutAttributeCenterX;
         labels.spacing = 8;
@@ -1588,7 +1639,7 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
             [self.dropBox.topAnchor constraintEqualToAnchor:view.topAnchor constant:20],
             [self.dropBox.leadingAnchor constraintEqualToAnchor:view.leadingAnchor constant:20],
             [self.dropBox.trailingAnchor constraintEqualToAnchor:view.trailingAnchor constant:-20],
-            [self.dropBox.heightAnchor constraintEqualToConstant:76],
+            [self.dropBox.heightAnchor constraintEqualToConstant:112],
             [appsTitle.topAnchor constraintEqualToAnchor:self.dropBox.bottomAnchor constant:14],
             [appsTitle.leadingAnchor constraintEqualToAnchor:self.dropBox.leadingAnchor],
             [scroll.topAnchor constraintEqualToAnchor:appsTitle.bottomAnchor constant:6],
@@ -1679,6 +1730,24 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     self.dropBox.borderColor = NSColor.separatorColor;
     NSArray<NSURL *> *urls = [sender.draggingPasteboard readObjectsForClasses:@[[NSURL class]]
         options:@{NSPasteboardURLReadingFileURLsOnlyKey: @YES}];
+    return [self addAppsAtURLs:urls];
+}
+
+- (void)chooseApps {
+    NSOpenPanel *picker = [NSOpenPanel openPanel];
+    picker.directoryURL = [NSURL fileURLWithPath:@"/Applications" isDirectory:YES];
+    picker.allowedContentTypes = @[UTTypeApplicationBundle];
+    picker.canChooseFiles = YES;
+    picker.canChooseDirectories = NO;
+    picker.allowsMultipleSelection = YES;
+    picker.treatsFilePackagesAsDirectories = NO;
+    picker.prompt = L(@"Добавить");
+    [picker beginSheetModalForWindow:self.addPanel completionHandler:^(NSModalResponse response) {
+        if (response == NSModalResponseOK) [self addAppsAtURLs:picker.URLs];
+    }];
+}
+
+- (BOOL)addAppsAtURLs:(NSArray<NSURL *> *)urls {
     NSMutableOrderedSet<NSString *> *identifiers = [NSMutableOrderedSet orderedSet];
     NSMutableDictionary<NSString *, NSURL *> *urlsByID = [NSMutableDictionary dictionary];
     NSUInteger skipped = 0;
@@ -1692,7 +1761,7 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
         }
     }
     if (identifiers.count == 0) {
-        self.dropStatus.stringValue = L(@"Перетащите приложения (.app) из Finder.");
+        self.dropStatus.stringValue = L(@"Выберите приложения (.app).");
         return NO;
     }
 
@@ -1725,6 +1794,7 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     (void)notification;
     [self.ipMonitor stop];
     [self.updateCheckTimer invalidate];
+    if (self.sleepObserver) [NSWorkspace.sharedWorkspace.notificationCenter removeObserver:self.sleepObserver];
 }
 
 - (void)updateIPMonitoring {
@@ -1768,7 +1838,7 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
 - (void)toggleForceClose {
     NSUserDefaults *settings = NSUserDefaults.standardUserDefaults;
     BOOL enabled = [settings boolForKey:ForceCloseOnIPChangeKey];
-    if (!enabled) {
+    if (!enabled && ![settings boolForKey:SafeCloseKey]) {
         NSAlert *alert = [[NSAlert alloc] init];
         alert.alertStyle = NSAlertStyleWarning;
         alert.messageText = L(@"Принудительно закрывать приложения при смене IP?");
@@ -1786,7 +1856,26 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     [self refreshSettings];
 }
 
-- (void)closeTrackedAppsWithCompletion:(void (^)(NSArray<NSString *> *))completion {
+- (void)toggleCloseOnSleep:(NSButton *)sender {
+    [NSUserDefaults.standardUserDefaults setBool:sender.state == NSControlStateValueOn forKey:CloseOnSleepKey];
+}
+
+- (void)changeCloseMode:(NSPopUpButton *)sender {
+    [NSUserDefaults.standardUserDefaults setBool:sender.indexOfSelectedItem == 1 forKey:SafeCloseKey];
+}
+
+- (void)changeSleepCloseMode:(NSPopUpButton *)sender {
+    [NSUserDefaults.standardUserDefaults setBool:sender.indexOfSelectedItem == 1 forKey:SafeSleepCloseKey];
+}
+
+- (void)closeAppsForSleep {
+    if ([NSUserDefaults.standardUserDefaults boolForKey:CloseOnSleepKey]) {
+        [self closeTrackedAppsForIPChange:NO completion:nil];
+    }
+}
+
+- (void)closeTrackedAppsForIPChange:(BOOL)ipChange completion:(void (^)(NSArray<NSString *> *))completion {
+    BOOL safe = [NSUserDefaults.standardUserDefaults boolForKey:ipChange ? SafeCloseKey : SafeSleepCloseKey];
     NSString *problem = nil;
     NSUInteger running = 0;
     NSMutableArray<NSRunningApplication *> *pending = [NSMutableArray array];
@@ -1794,9 +1883,10 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     if (!self.closingPIDs) self.closingPIDs = [NSMutableSet set];
     for (NSRunningApplication *app in RunningTrackedApps(&problem)) {
         NSNumber *pid = @(app.processIdentifier);
-        if ([self.closingPIDs containsObject:pid]) continue;
+        if ([self.closingPIDs containsObject:pid] && (ipChange || safe)) continue;
         running++;
-        if (![app forceTerminate]) continue;
+        if (!(safe ? [app terminate] : [app forceTerminate])) continue;
+        if (!completion) continue;
         [self.closingPIDs addObject:pid];
         [pending addObject:app];
     }
@@ -1804,16 +1894,19 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
         NSNumber *pid = @(app.processIdentifier);
         names[pid] = app.localizedName ?: app.bundleIdentifier ?: pid.stringValue;
     }
-    self.lastIPEvent = problem ? [self.lastIPEvent stringByAppendingString:L(@" · ошибка в .env")] :
-        [self.lastIPEvent stringByAppendingFormat:L(@" · запросов на закрытие %lu из %lu"),
-            (unsigned long)pending.count, (unsigned long)running];
+    if (ipChange) {
+        self.lastIPEvent = problem ? [self.lastIPEvent stringByAppendingString:L(@" · ошибка в .env")] :
+            [self.lastIPEvent stringByAppendingFormat:L(@" · запросов на закрытие %lu из %lu"),
+                (unsigned long)pending.count, (unsigned long)running];
+    }
+    if (!completion) return;
     if (pending.count == 0) {
         completion(@[]);
         return;
     }
 
     NSMutableOrderedSet<NSString *> *closed = [NSMutableOrderedSet orderedSet];
-    NSTimeInterval deadline = NSProcessInfo.processInfo.systemUptime + 5;
+    NSTimeInterval deadline = NSProcessInfo.processInfo.systemUptime + (safe ? 60 : 5);
     NSTimer *confirmation = [NSTimer timerWithTimeInterval:0.2 repeats:YES block:^(NSTimer *timer) {
         BOOL expired = NSProcessInfo.processInfo.systemUptime >= deadline;
         for (NSRunningApplication *app in [pending copy]) {
@@ -1841,7 +1934,7 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     __block NSArray<NSString *> *closed = nil;
     if ([settings boolForKey:ForceCloseOnIPChangeKey]) {
         dispatch_group_enter(event);
-        [self closeTrackedAppsWithCompletion:^(NSArray<NSString *> *names) {
+        [self closeTrackedAppsForIPChange:YES completion:^(NSArray<NSString *> *names) {
             closed = names;
             dispatch_group_leave(event);
         }];

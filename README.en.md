@@ -14,7 +14,7 @@ Route Shield lives in the menu bar. Add the apps you want to track. To check the
 - **Prelaunch IP check.** Open an app through Route Shield to review your public IPv4 and IPv6 addresses and their countries before it starts.
 - **Dock shortcuts.** Each shortcut uses the original app's icon and opens the IP check window.
 - **IP change notifications.** Choose whether banners show the new IP address, the country, or both.
-- **Force-quit on IP changes.** When enabled, Route Shield requests termination of running apps on your list, including apps you opened directly.
+- **Close apps on IP changes or sleep.** Choose a closing mode for each trigger. This also applies to apps opened directly.
 - **Russian and English.** Change the interface language and login behavior in Settings.
 
 ## Installation
@@ -47,7 +47,7 @@ If your account cannot write to `/Applications`, run `./install.sh --user` to in
 
 ## First run
 
-On first launch, choose your language, configure IP change notifications, and decide whether to force-quit apps on your list. Select **Done** to save your preferences and open the Route Shield menu. Route Shield suggests Russian if Russian is your preferred macOS language and English for all other languages.
+On first launch, choose your language, configure IP change notifications, and decide whether to close tracked apps on IP changes and choose a closing mode. Select **Done** to save your preferences and open the Route Shield menu. Route Shield suggests Russian if Russian is your preferred macOS language and English for all other languages.
 
 The screenshots use an example app list and test IP addresses.
 
@@ -59,7 +59,7 @@ Click the <img src="assets/screenshots/menu-bar-icon.png" width="26" alt="Route 
 
 ### Add apps from Finder
 
-Choose **Add Apps…** and drag one or more apps into the drop area at the top of the window. Click the red cross on an icon to remove that app from the list.
+Choose **Add Apps…** and use **Choose App…** to select one or more `.app` bundles, or drag them from Finder. Click the red cross on an icon to remove that app from the list.
 
 <img src="assets/screenshots/en-add-apps.png" width="550" alt="Add Apps window with a drop area and icons for ChatGPT, Claude, Gemini, and VS Code">
 
@@ -73,7 +73,7 @@ You can also open tracked apps as usual from Finder, Spotlight, or their origina
 
 To see the prelaunch window when opening apps from the Dock, choose **Create or Update Dock Shortcuts**. Drag the shortcuts from `~/Applications/Route Shield` into the Dock in place of the original icons.
 
-Choose **Settings…** from the Route Shield menu. In **General**, choose which connection details appear in the menu and the prelaunch window, change the language, or enable launch at login or force-quit. The **About Us** tab links to the GitHub repository.
+Choose **Settings…** from the Route Shield menu. In **General**, choose which connection details appear in the menu and the prelaunch window, change the language, or enable launch at login. Under **Closing apps**, set separate modes for IP changes and sleep. Sleep closing is off by default. The **About Us** tab links to the GitHub repository.
 
 The app list lives at `~/Library/Application Support/VPN Guard/.env`. To edit it manually, choose **Settings… → General → Open Configuration File…**. Remove IDs from the `APPS=` line or add new IDs separated by commas. The template comments are in English.
 
@@ -87,7 +87,7 @@ Route Shield sends a macOS notification when it detects a change to your public 
 
 Under **Notification details**, choose **IP address**, **Country**, or **IP address and country**. Select **Test Notification** to see a sample banner with your current connection details.
 
-If force-quit is enabled and Route Shield closes apps after an IP change, a separate notification lists the apps that were closed.
+If app closing is enabled and Route Shield closes apps after an IP change, a separate notification lists the apps that were closed.
 
 ## Updates
 
@@ -103,9 +103,9 @@ Route Shield makes HTTPS requests to [ipify](https://www.ipify.org/) for IPv4 an
 
 Route Shield sends the detected public IP addresses to Country.is to estimate the country. The **Connection country** section in the menu and prelaunch window shows separate rows for IPv4 and IPv6. The lookup leaves **Open** available as soon as the IP checks finish. [Country.is](https://country.is/)
 
-When monitoring is enabled, Route Shield checks after macOS network events and after wake. The fallback check runs about every 15 seconds while force-quit is enabled and a tracked app is running. Otherwise it runs about every two minutes. The first successful result establishes a baseline for each address family. A failed request by itself does not count as an IP change.
+When monitoring is enabled, Route Shield checks after macOS network events and after wake. The fallback check runs about every 15 seconds while closing on IP changes is enabled and a tracked app is running. Otherwise it runs about every two minutes. The first successful result establishes a baseline for each address family. A failed request by itself does not count as an IP change.
 
-**Force-quit works regardless of how you opened an app.** If enabled, Route Shield requests termination of all running apps on the list as soon as it detects a change to IPv4 or IPv6. An app can still access the network before detection, and force-quitting can discard unsaved changes.
+**Emergency** mode closes apps and their connections sooner and can discard unsaved changes. **Safe** mode requests a normal quit, which lets apps offer to save changes. An app may wait for input or stay open. Traffic can reach the network before Route Shield detects an IP change. Closing the lid triggers sleep closing if the Mac goes to sleep. Apps may need more time than the system allows.
 
 ## Build and package
 
