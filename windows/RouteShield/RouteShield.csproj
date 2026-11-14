@@ -8,7 +8,7 @@
     <ApplicationIcon>RouteShield.ico</ApplicationIcon>
     <ImplicitUsings>enable</ImplicitUsings>
     <Nullable>enable</Nullable>
-    <Version>1.0.0-beta.1</Version>
+    <Version>1.0.0-beta.2</Version>
   </PropertyGroup>
   <ItemGroup>
     <InternalsVisibleTo Include="RouteShield.Tests" />

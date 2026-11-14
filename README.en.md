@@ -52,10 +52,9 @@ If your account cannot write to `/Applications`, run `./install.sh --user` to in
 
 ### Windows 11 x64 (beta)
 
-1. Open the [Windows test builds](https://github.com/01trisha/route-shield/actions/workflows/windows.yml?query=branch%3Afeature%2Fwindows) and select the latest successful run on `feature/windows`.
-2. Sign in to GitHub, download **route-shield-windows-x64** from **Artifacts**, and extract it.
-3. Run `Setup.exe` for a per-user installation, or extract the entire inner ZIP and launch `RouteShield.exe`. Both builds include .NET.
-4. After first launch, look for the Route Shield icon near the clock in the notification area.
+1. Open the [Windows beta release](https://github.com/01trisha/route-shield/releases/tag/windows-v1.0.0-beta.2) and download the `*-Setup.exe` installer or ZIP from **Assets**.
+2. Run the per-user installer or extract the entire ZIP and launch `RouteShield.exe`. Both builds include .NET.
+3. After first launch, look for the Route Shield icon near the clock in the notification area.
 
 [Windows instructions and source builds](windows/README.md)
 
