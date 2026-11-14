@@ -179,6 +179,21 @@ internal sealed class SettingsWindow : ShieldWindow
 {
     private readonly CheckBox four, six, country, notify, close, sleep, startup;
     private readonly ComboBox language, details, mode, sleepMode;
+    private readonly Button updateButton;
+    private readonly TabControl tabs = new() { Dock = DockStyle.Fill };
+
+    internal void ShowUpdate(Release? release, bool focus = false)
+    {
+        updateButton.Text = release is null ? T("Check for Updates…", "Проверить обновления…") :
+            T($"Download Update {release.DisplayVersion}…", $"Скачать обновление {release.DisplayVersion}…");
+        updateButton.UseVisualStyleBackColor = release is null;
+        updateButton.BackColor = release is null ? SystemColors.Control : SystemColors.Highlight;
+        updateButton.ForeColor = release is null ? SystemColors.ControlText : SystemColors.HighlightText;
+        if (!focus) return;
+        tabs.SelectedIndex = 0;
+        ActiveControl = updateButton;
+        updateButton.Focus();
+    }
 
     internal bool Startup => startup.Checked;
     internal (string, bool, bool, bool, bool, NotificationDetails, bool, bool, CloseMode, CloseMode) Choice =>
@@ -191,13 +206,13 @@ internal sealed class SettingsWindow : ShieldWindow
         Text = T("Route Shield Settings", "Настройки Route Shield");
         ClientSize = new Size(595, 610);
         MinimumSize = new Size(505, 400);
-        var tabs = new TabControl { Dock = DockStyle.Fill };
         var general = AddTab(T("General", "Основные"));
         var notifications = AddTab(T("Notifications", "Уведомления"));
         var about = AddTab(T("About Us", "О нас"));
 
-        general.Controls.Add(Button(T("Check for Updates…", "Проверить обновления…"),
-            async (sender, _) => await RunButton((Button)sender!, update)));
+        updateButton = Button(T("Check for Updates…", "Проверить обновления…"),
+            async (sender, _) => await RunButton((Button)sender!, update));
+        general.Controls.Add(updateButton);
         general.Controls.Add(Caption(T("Show connection details", "Показывать информацию о соединении")));
         four = Check("IPv4", settings.ShowIPv4);
         six = Check("IPv6", settings.ShowIPv6);

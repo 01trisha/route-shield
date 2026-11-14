@@ -28,6 +28,7 @@ internal static class Program
             CheckBaseline();
             CheckVersions();
             CheckWindows();
+            CheckUpdateSettings();
             Task.Run(CheckTermination).GetAwaiter().GetResult();
             return 0;
         }
@@ -57,7 +58,11 @@ internal static class Program
         var beta = Release.Parse("windows-v1.0.0-beta.2")!.Value;
         Require(Release.Parse("windows-v1.0.0-beta.10")!.Value.CompareTo(beta) > 0, "Beta numbers compare numerically");
         Require(Release.Parse("windows-v1.0.0")!.Value.CompareTo(beta) > 0, "Stable sorts after beta");
-        Require(Release.Parse("v1.4.1") is null, "macOS tags are ignored");
+        Require(Release.Parse("v1.4.1") is null && Release.Available("v99.0.0") is null, "macOS tags are ignored");
+        Require(Release.Available(Updates.Current) is null && Release.Available("windows-v" + Updates.Current) is null,
+            "A cached tag for the installed release is ignored");
+        Require(Release.Available("windows-v99.0.0-beta.2")?.DisplayVersion == "99.0.0-beta.2",
+            "Available Windows beta displays its full version");
         Require(Release.Parse("windows-v1.0.0-beta.2147483648") is null, "Out-of-range beta numbers are rejected");
     }
 
@@ -107,6 +112,32 @@ internal static class Program
         Require(result == DialogResult.OK && window.Choice.Item1 == "ru" && window.Choice.Item2 && window.Choice.Item3 == NotificationDetails.Both &&
                 window.Choice.Item4 && window.Choice.Item5 == CloseMode.Safe, "Welcome retains notification and safe closing choices");
         Require(!preferences.WelcomeCompleted && !preferences.ForceClose, "The welcome window stages changes");
+    }
+
+    private static void CheckUpdateSettings()
+    {
+        using var icon = (Icon)SystemIcons.Application.Clone();
+        using var window = new SettingsWindow(new Preferences { Language = "en" }, icon, _ => Task.CompletedTask,
+            () => Task.CompletedTask, _ => { }, _ => { });
+        Exception? failure = null;
+        window.Shown += (_, _) =>
+        {
+            try
+            {
+                var tabs = window.Controls.OfType<TabControl>().Single();
+                tabs.SelectedIndex = 1;
+                window.ShowUpdate(Release.Available("windows-v99.0.0-beta.2"), focus: true);
+                var button = (Button)window.ActiveControl!;
+                Require(tabs.SelectedIndex == 0 && button.Focused && button.Text == "Download Update 99.0.0-beta.2…",
+                    "Update activation opens General and focuses the download button");
+                window.ShowUpdate(null);
+                Require(button.Text == "Check for Updates…", "Clearing the available release restores the check button");
+            }
+            catch (Exception error) { failure = error; }
+            finally { window.Close(); }
+        };
+        window.ShowDialog();
+        if (failure is not null) throw new InvalidOperationException("Update UI failed.", failure);
     }
 
     private static void ClickNext(WelcomeWindow window)

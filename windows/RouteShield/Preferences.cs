@@ -26,6 +26,9 @@ internal sealed class Preferences
     public NotificationDetails Details { get; set; }
     public DateTimeOffset LastUpdateCheck { get; set; }
     public string? LastNotifiedTag { get; set; }
+    public DateTimeOffset LastUpdateNotice { get; set; }
+    public string? LatestUpdateTag { get; set; }
+    public string? DismissedUpdateTag { get; set; }
     public List<TrackedApp> Apps { get; set; } = [];
 
     internal static Preferences Load()

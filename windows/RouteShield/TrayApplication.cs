@@ -18,7 +18,7 @@ internal sealed class TrayApplication : ApplicationContext
     private readonly ContextMenuStrip menu = new() { ShowImageMargin = true };
     private readonly Timer updateTimer = new() { Interval = 60000 };
     private readonly Timer alertTimer = new() { Interval = 10000 };
-    private readonly Queue<(string Title, string Body)> alerts = new();
+    private readonly Queue<(string Title, string Body, Action? Click)> alerts = new();
     private readonly Monitor monitor;
     private readonly Dictionary<Guid, Bitmap> menuImages = [];
     private readonly Dictionary<string, string[]> countryNames;
@@ -26,12 +26,16 @@ internal sealed class TrayApplication : ApplicationContext
     private Addresses? addresses;
     private (string? IPv4, string? IPv6) codes;
     private Release? newer;
-    private bool checkingUpdates, alertActive, refreshing;
+    private bool checkingUpdates, alertActive, refreshing, updateSettingsRequested;
+    private Action? alertClick;
+    private ToolStripControlHost? updateBanner;
+    private string? bannerTag, bannerLanguage;
     private int connectionRevision;
 
     internal TrayApplication(Preferences settings, SynchronizationContext ui)
     {
         this.settings = settings;
+        newer = Release.Available(settings.LatestUpdateTag);
         using var countryData = Assembly.GetExecutingAssembly().GetManifestResourceStream("RouteShield.CountryNames.json")!;
         countryNames = JsonSerializer.Deserialize<Dictionary<string, string[]>>(countryData)!;
         artwork = Icon.ExtractAssociatedIcon(Environment.ProcessPath!) ?? (Icon)SystemIcons.Application.Clone();
@@ -41,13 +45,22 @@ internal sealed class TrayApplication : ApplicationContext
             if (args.Button == MouseButtons.Left) ShowMenu(Cursor.Position);
         };
         icon.BalloonTipClosed += (_, _) => AdvanceAlert();
-        icon.BalloonTipClicked += (_, _) => AdvanceAlert();
+        icon.BalloonTipClicked += (_, _) =>
+        {
+            var click = alertClick;
+            AdvanceAlert();
+            click?.Invoke();
+        };
         alertTimer.Tick += (_, _) => AdvanceAlert();
         menu.Opening += (_, _) => { if (dialog is null) _ = Refresh(); };
         monitor = new(connection, settings, ui);
         monitor.Refreshed += samples => _ = SetConnection(samples);
         monitor.Changed += NotifyChange;
-        updateTimer.Tick += (_, _) => _ = CheckUpdates(manual: false);
+        updateTimer.Tick += (_, _) =>
+        {
+            RemindAboutUpdate();
+            _ = CheckUpdates(manual: false);
+        };
         RenderMenu();
     }
 
@@ -78,6 +91,7 @@ internal sealed class TrayApplication : ApplicationContext
             RenderMenu();
         }
         monitor.Apply();
+        RemindAboutUpdate();
         _ = CheckUpdates(manual: false);
         if (Guid.TryParse(command, out Guid id))
         {
@@ -111,16 +125,19 @@ internal sealed class TrayApplication : ApplicationContext
 
     private void RenderMenu()
     {
-        var oldItems = menu.Items.Cast<ToolStripItem>().ToArray();
-        menu.Items.Clear();
-        foreach (var item in oldItems) item.Dispose();
+        menu.SuspendLayout();
+        foreach (var item in menu.Items.Cast<ToolStripItem>().Where(item => item != updateBanner).ToArray())
+        {
+            menu.Items.Remove(item);
+            item.Dispose();
+        }
         if (settings.ShowIPv4 || settings.ShowIPv6 || settings.ShowCountry)
         {
             string details = addresses is null
                 ? T("Checking connection…", "Проверка соединения…")
                 : Format(addresses, codes, settings.ShowIPv4, settings.ShowIPv6, settings.ShowCountry);
-            foreach (string line in details.Split('\n')) menu.Items.Add(new ToolStripMenuItem(line) { Enabled = false });
-            menu.Items.Add(new ToolStripSeparator());
+            foreach (string line in details.Split('\n')) AddMenuItem(new ToolStripMenuItem(line) { Enabled = false });
+            AddMenuItem(new ToolStripSeparator());
         }
         foreach (var app in settings.Apps)
         {
@@ -130,12 +147,70 @@ internal sealed class TrayApplication : ApplicationContext
         Item(T("Add Apps…", "Добавить приложения…"), ShowApps);
         if (settings.Apps.Count > 0)
             Item(T("Create Desktop Shortcuts", "Создать ярлыки на рабочем столе"), CreateShortcuts);
-        menu.Items.Add(new ToolStripSeparator());
-        if (newer is { } release)
-            Item(T($"Update available · {release.Version}", $"Доступно обновление · {release.Version}"), () => OpenUrl(release.Page));
+        AddMenuItem(new ToolStripSeparator());
         Item(T("Settings…", "Настройки…"), ShowSettings);
         Item(T("Quit Route Shield", "Выйти из Route Shield"), ExitThread);
+        if (newer is { } release && settings.DismissedUpdateTag != release.Tag)
+        {
+            if (updateBanner is null || bannerTag != release.Tag || bannerLanguage != settings.Language)
+            {
+                RemoveUpdateBanner();
+                updateBanner = CreateUpdateBanner(release);
+                bannerTag = release.Tag;
+                bannerLanguage = settings.Language;
+                menu.Items.Add(updateBanner);
+            }
+            menu.Items.Insert(menu.Items.IndexOf(updateBanner), new ToolStripSeparator());
+        }
+        else RemoveUpdateBanner();
+        menu.ResumeLayout();
         icon.Text = newer is null ? "Route Shield" : "Route Shield • " + T("Update available", "Доступно обновление");
+    }
+
+    private void RemoveUpdateBanner()
+    {
+        if (updateBanner is null) return;
+        menu.Items.Remove(updateBanner);
+        updateBanner.Dispose();
+        updateBanner = null;
+    }
+
+    private ToolStripControlHost CreateUpdateBanner(Release release)
+    {
+        var title = new Button
+        {
+            Text = T($"Version {release.DisplayVersion} is available", $"Доступна версия {release.DisplayVersion}"),
+            AutoSize = true, FlatStyle = FlatStyle.Flat, ForeColor = SystemColors.HotTrack,
+            Margin = Padding.Empty
+        };
+        title.FlatAppearance.BorderSize = 0;
+        title.Click += (_, _) => { menu.Close(); ShowUpdateSettings(); };
+        var dismiss = new Button
+        {
+            Text = "×", AutoSize = true, FlatStyle = FlatStyle.Flat, Margin = Padding.Empty,
+            AccessibleName = T("Dismiss update message", "Скрыть сообщение об обновлении")
+        };
+        dismiss.FlatAppearance.BorderSize = 0;
+        dismiss.Click += (_, _) =>
+        {
+            menu.Close();
+            string? previous = settings.DismissedUpdateTag;
+            settings.DismissedUpdateTag = release.Tag;
+            if (!Save()) settings.DismissedUpdateTag = previous;
+            RenderMenu();
+        };
+        var row = new TableLayoutPanel
+        {
+            AutoSize = true, AutoSizeMode = AutoSizeMode.GrowAndShrink, ColumnCount = 2,
+            RowCount = 1, BackColor = SystemColors.Menu
+        };
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        row.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
+        title.Anchor = AnchorStyles.Left | AnchorStyles.Right;
+        dismiss.Anchor = AnchorStyles.Right;
+        row.Controls.Add(title, 0, 0);
+        row.Controls.Add(dismiss, 1, 0);
+        return new ToolStripControlHost(row) { AutoSize = true };
     }
 
     private static Bitmap AppBitmap(TrackedApp app)
@@ -144,11 +219,14 @@ internal sealed class TrayApplication : ApplicationContext
         return image.ToBitmap();
     }
 
+    private void AddMenuItem(ToolStripItem item) =>
+        menu.Items.Insert(updateBanner is null ? menu.Items.Count : menu.Items.IndexOf(updateBanner), item);
+
     private ToolStripMenuItem Item(string title, Action action)
     {
         var item = new ToolStripMenuItem(title) { Text = title.Replace("&", "&&") };
         item.Click += (_, _) => action();
-        menu.Items.Add(item);
+        AddMenuItem(item);
         return item;
     }
 
@@ -242,9 +320,9 @@ internal sealed class TrayApplication : ApplicationContext
         catch (OperationCanceledException) when (shutdown.IsCancellationRequested) { }
     }
 
-    private void Notify(string title, string body)
+    private void Notify(string title, string body, Action? click = null)
     {
-        alerts.Enqueue((title, body));
+        alerts.Enqueue((title, body, click));
         if (!alertActive) AdvanceAlert();
     }
 
@@ -252,6 +330,7 @@ internal sealed class TrayApplication : ApplicationContext
     {
         alertTimer.Stop();
         alertActive = alerts.TryDequeue(out var next);
+        alertClick = next.Click;
         if (!alertActive || shutdown.IsCancellationRequested) return;
         string body = next.Body.Length <= 255 ? next.Body : next.Body[..252] + "…";
         icon.ShowBalloonTip(8000, next.Title, body, ToolTipIcon.Info);
@@ -269,20 +348,13 @@ internal sealed class TrayApplication : ApplicationContext
         {
             newer = await updates.Check(shutdown.Token);
             if (shutdown.IsCancellationRequested) return;
+            settings.LatestUpdateTag = newer?.Tag;
+            Save(showError: false);
             RenderMenu();
-            if (manual)
-            {
-                if (newer is { } release && MessageBox.Show(T("A Windows update is available. Open its release page?",
-                    "Доступно обновление для Windows. Открыть страницу релиза?"), "Route Shield",
-                    MessageBoxButtons.YesNo, MessageBoxIcon.Information) == DialogResult.Yes) OpenUrl(release.Page);
-                else if (newer is null) MessageBox.Show(T("You have the latest Windows version.", "У вас последняя версия для Windows."), "Route Shield");
-            }
-            else if (newer is { } available && settings.Notify && settings.LastNotifiedTag != available.Tag)
-            {
-                settings.LastNotifiedTag = available.Tag;
-                Save(showError: false);
-                Notify(T("Update available", "Доступно обновление"), available.Tag);
-            }
+            if (dialog is SettingsWindow window && !window.IsDisposed) window.ShowUpdate(newer, focus: manual && newer is not null);
+            if (manual && newer is null)
+                MessageBox.Show(dialog, T("You have the latest Windows version.", "У вас последняя версия для Windows."), "Route Shield");
+            RemindAboutUpdate();
         }
         catch (Exception error) when (error is HttpRequestException or OperationCanceledException or JsonException or InvalidOperationException or KeyNotFoundException)
         {
@@ -292,9 +364,47 @@ internal sealed class TrayApplication : ApplicationContext
         finally { checkingUpdates = false; }
     }
 
-    private void ShowSettings()
+    private void RemindAboutUpdate()
     {
-        using var window = new SettingsWindow(settings, artwork, TestNotification, () => CheckUpdates(manual: true), OpenUrl, Error);
+        if (!settings.WelcomeCompleted || newer is not { } release ||
+            (settings.LastNotifiedTag == release.Tag &&
+             DateTimeOffset.UtcNow - settings.LastUpdateNotice < TimeSpan.FromDays(2))) return;
+        settings.LastNotifiedTag = release.Tag;
+        settings.LastUpdateNotice = DateTimeOffset.UtcNow;
+        Save(showError: false);
+        Notify(T("Route Shield update available", "Доступно обновление Route Shield"),
+            T($"Version {release.DisplayVersion} is available", $"Доступна версия {release.DisplayVersion}"), ShowUpdateSettings);
+    }
+
+    private void ShowUpdateSettings()
+    {
+        if (dialog is SettingsWindow settingsWindow)
+        {
+            settingsWindow.Activate();
+            settingsWindow.ShowUpdate(newer, focus: true);
+        }
+        else if (dialog is null) ShowSettings(focusUpdate: true);
+        else
+        {
+            updateSettingsRequested = true;
+            dialog.Activate();
+        }
+    }
+
+    private Task UpdateAction()
+    {
+        if (newer is not { } release) return CheckUpdates(manual: true);
+        OpenUrl(release.Page);
+        return Task.CompletedTask;
+    }
+
+    private void ShowSettings() => ShowSettings(focusUpdate: false);
+
+    private void ShowSettings(bool focusUpdate)
+    {
+        using var window = new SettingsWindow(settings, artwork, TestNotification, UpdateAction, OpenUrl, Error);
+        window.ShowUpdate(newer);
+        if (focusUpdate) window.Shown += (_, _) => window.ShowUpdate(newer, focus: true);
         if (Show(window) != DialogResult.OK) return;
         var previous = (settings.Language, settings.ShowIPv4, settings.ShowIPv6, settings.ShowCountry,
             settings.Notify, settings.Details, settings.ForceClose, settings.CloseOnSleep, settings.ClosingMode, settings.SleepClosingMode);
@@ -366,7 +476,15 @@ internal sealed class TrayApplication : ApplicationContext
         if (dialog is not null) return DialogResult.Cancel;
         dialog = form;
         try { return form.ShowDialog(); }
-        finally { dialog = null; }
+        finally
+        {
+            dialog = null;
+            if (updateSettingsRequested)
+            {
+                updateSettingsRequested = false;
+                SynchronizationContext.Current!.Post(_ => ShowUpdateSettings(), null);
+            }
+        }
     }
 
     private bool Save(bool showError = true)

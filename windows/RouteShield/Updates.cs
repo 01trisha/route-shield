@@ -7,6 +7,15 @@ namespace RouteShield;
 
 internal sealed record Release(string Tag, string Page, Version Version, int Beta)
 {
+    internal string DisplayVersion => Tag["windows-v".Length..];
+
+    internal static Release? Available(string? tag)
+    {
+        if (tag is null || !tag.StartsWith("windows-v", StringComparison.Ordinal) ||
+            Parse(tag) is not { } version || version.CompareTo(Parse(Updates.Current)!.Value) <= 0) return null;
+        return new(tag, Program.Repo + "/releases/tag/" + tag, version.Version, version.Beta);
+    }
+
     internal static (Version Version, int Beta)? Parse(string value)
     {
         var match = Regex.Match(value, @"\A(?:windows-v)?(\d+\.\d+\.\d+)(?:-beta\.(\d+))?\z");
@@ -27,7 +36,6 @@ internal sealed class Updates : IDisposable
 
     internal async Task<Release?> Check(CancellationToken token)
     {
-        var current = Release.Parse(Current)!.Value;
         for (int page = 1; ; page++)
         {
             var releases = await client.GetFromJsonAsync<JsonElement>(
@@ -36,14 +44,12 @@ internal sealed class Updates : IDisposable
             foreach (var entry in releases.EnumerateArray())
             {
                 string? tag = entry.GetProperty("tag_name").GetString();
-                if (entry.GetProperty("draft").GetBoolean() || tag is null ||
-                    !tag.StartsWith("windows-v", StringComparison.Ordinal) ||
-                    Release.Parse(tag) is not { } version || version.CompareTo(current) <= 0) continue;
+                if (entry.GetProperty("draft").GetBoolean() || Release.Available(tag) is not { } release) continue;
                 if (!entry.GetProperty("assets").EnumerateArray().Any(asset =>
                     asset.GetProperty("name").GetString() is { } name &&
                     (name.EndsWith("-Windows-x64.zip", StringComparison.OrdinalIgnoreCase) ||
                      name.EndsWith("-Windows-x64-Setup.exe", StringComparison.OrdinalIgnoreCase)))) continue;
-                compatible.Add(new(tag, Program.Repo + "/releases/tag/" + tag, version.Version, version.Beta));
+                compatible.Add(release);
             }
             var newest = compatible.OrderByDescending(release => release.Version).ThenByDescending(release => release.Beta).FirstOrDefault();
             if (newest is not null || releases.GetArrayLength() < 30) return newest;
