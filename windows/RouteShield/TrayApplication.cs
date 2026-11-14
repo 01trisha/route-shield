@@ -283,19 +283,23 @@ internal sealed class TrayApplication : ApplicationContext
         countryNames.TryGetValue(code, out var names) ? names[settings.Language == "ru" ? 1 : 0] : code;
 
     private string Format(Addresses samples, (string? IPv4, string? IPv6) country, bool four, bool six, bool showCountry,
-        bool changedOnly = false)
+        bool changedOnly = false, bool countryFirst = false)
     {
         List<string> lines = [];
-        if (four && (!changedOnly || samples.IPv4 is not null))
-            lines.Add("IPv4: " + (samples.IPv4?.ToString() ?? T("Unavailable", "Недоступен")));
-        if (six && (!changedOnly || samples.IPv6 is not null))
-            lines.Add("IPv6: " + (samples.IPv6?.ToString() ?? T("Unavailable", "Недоступен")));
-        if (showCountry)
+        void AddCountries()
         {
+            if (!showCountry) return;
             lines.Add(T("Connection country:", "Страна соединения:"));
             if (!changedOnly || samples.IPv4 is not null) lines.Add($"  IPv4: {CountryName(country.IPv4)}");
             if (!changedOnly || samples.IPv6 is not null) lines.Add($"  IPv6: {CountryName(country.IPv6)}");
         }
+
+        if (countryFirst) AddCountries();
+        if (four && (!changedOnly || samples.IPv4 is not null))
+            lines.Add("IPv4: " + (samples.IPv4?.ToString() ?? T("Unavailable", "Недоступен")));
+        if (six && (!changedOnly || samples.IPv6 is not null))
+            lines.Add("IPv6: " + (samples.IPv6?.ToString() ?? T("Unavailable", "Недоступен")));
+        if (!countryFirst) AddCountries();
         return string.Join('\n', lines);
     }
 
@@ -479,7 +483,7 @@ internal sealed class TrayApplication : ApplicationContext
     private void OpenApp(TrackedApp app)
     {
         using var window = new LaunchWindow(settings, artwork, app, connection,
-            (sample, countries) => Format(sample, countries, settings.ShowIPv4, settings.ShowIPv6, settings.ShowCountry));
+            (sample, countries) => Format(sample, countries, settings.ShowIPv4, settings.ShowIPv6, settings.ShowCountry, countryFirst: true));
         if (Show(window) != DialogResult.OK) return;
         try { WindowsApps.Launch(app); }
         catch (Exception error) when (IsFileError(error)) { Error(error.Message); }

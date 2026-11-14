@@ -5,7 +5,6 @@ namespace RouteShield;
 internal abstract class ShieldWindow : Form
 {
     protected readonly Preferences settings;
-    protected static readonly Color Muted = Color.FromArgb(98, 107, 120);
 
     protected ShieldWindow(Preferences settings, Icon artwork)
     {
@@ -14,7 +13,8 @@ internal abstract class ShieldWindow : Form
         Icon = artwork;
         Font = new Font("Segoe UI", 10);
         AutoScaleMode = AutoScaleMode.Dpi;
-        BackColor = SystemColors.Window;
+        BackColor = SystemInformation.HighContrast ? SystemColors.Window : Color.FromArgb(247, 248, 250);
+        ForeColor = SystemColors.WindowText;
         StartPosition = FormStartPosition.CenterScreen;
         MaximizeBox = false;
         MinimizeBox = false;
@@ -284,7 +284,7 @@ internal sealed class SettingsWindow : ShieldWindow
 
         FlowLayoutPanel AddTab(string title)
         {
-            var page = new TabPage(title) { Padding = new Padding(10) };
+            var page = new TabPage(title) { Padding = new Padding(10), BackColor = BackColor };
             var column = Column();
             page.Controls.Add(column);
             tabs.TabPages.Add(page);
@@ -310,7 +310,7 @@ internal sealed class ReleaseNotesWindow : ShieldWindow
         var body = new TextBox
         {
             Dock = DockStyle.Fill, Multiline = true, ReadOnly = true, Text = notes,
-            ScrollBars = ScrollBars.Vertical, BackColor = SystemColors.Window
+            ScrollBars = ScrollBars.Vertical, BackColor = BackColor
         };
         var footer = Footer();
         var done = Button("OK", (_, _) => Close());
@@ -485,19 +485,42 @@ internal sealed class LaunchWindow : ShieldWindow
         Func<Addresses, (string?, string?), string> format) : base(settings, artwork)
     {
         Text = T($"Open {app.Name}", $"Открыть {app.Name}");
-        ClientSize = new Size(500, 255);
+        ClientSize = new Size(630, 315);
         FormBorderStyle = FormBorderStyle.FixedDialog;
+        var content = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1 };
+        content.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
+        content.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 124));
         var body = Column();
-        body.Controls.Add(Caption(T("Check the connection before opening the app.", "Проверьте соединение перед запуском приложения.")));
+        var heading = Caption(T($"Open {app.Name}?", $"Открыть «{app.Name}»?"));
+        heading.Font = new Font(Font.FontFamily, 15, FontStyle.Bold);
+        var guidance = Caption(T("Check the connection before opening the app.", "Проверьте соединение перед запуском приложения."));
         var result = Caption(T("Checking public IP…", "Проверка внешнего IP…"));
-        result.ForeColor = Muted;
-        body.Controls.Add(result);
+        var detailsFont = new Font(Font, FontStyle.Bold);
+        guidance.Font = result.Font = detailsFont;
+        Disposed += (_, _) => detailsFont.Dispose();
+        body.SizeChanged += (_, _) =>
+        {
+            var width = Math.Max(1, body.ClientSize.Width - SystemInformation.VerticalScrollBarWidth - 6);
+            foreach (var label in new[] { heading, guidance, result }) label.MaximumSize = new Size(width, 0);
+        };
+        using var appIcon = WindowsApps.IconFor(app);
+        var image = new PictureBox
+        {
+            Image = appIcon.ToBitmap(), AccessibleName = app.Name,
+            SizeMode = PictureBoxSizeMode.Zoom, Size = new Size(108, 108), Anchor = AnchorStyles.None
+        };
+        image.Disposed += (_, _) => image.Image?.Dispose();
+        body.Controls.AddRange([heading, guidance, result]);
+        content.Controls.Add(body, 0, 0);
+        content.Controls.Add(image, 1, 0);
         var footer = Footer();
         var open = Button(T("Open", "Открыть"), (_, _) => DialogResult = DialogResult.OK);
-        open.Enabled = false;
+        bool showConnection = settings.ShowIPv4 || settings.ShowIPv6 || settings.ShowCountry;
+        guidance.Visible = result.Visible = showConnection;
+        open.Enabled = !showConnection;
         var cancel = Button(T("Cancel", "Отмена"), (_, _) => DialogResult = DialogResult.Cancel);
         footer.Controls.AddRange([open, cancel]);
-        Controls.Add(body);
+        Controls.Add(content);
         Controls.Add(footer);
         AcceptButton = open;
         CancelButton = cancel;
@@ -506,6 +529,7 @@ internal sealed class LaunchWindow : ShieldWindow
         Disposed += (_, _) => { source.Cancel(); source.Dispose(); };
         Shown += async (_, _) =>
         {
+            if (!showConnection) return;
             try
             {
                 var samples = await connection.Read(token);

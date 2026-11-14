@@ -411,12 +411,41 @@ static BOOL InstallLauncher(NSURL *target, NSString *identifier, NSURL *destinat
     return installed;
 }
 
+static NSColor *AppWindowBackground() {
+    static NSColor *background;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        background = [NSColor colorWithName:nil dynamicProvider:^NSColor *(NSAppearance *appearance) {
+            NSString *style = [appearance bestMatchFromAppearancesWithNames:@[
+                NSAppearanceNameAccessibilityHighContrastAqua, NSAppearanceNameAccessibilityHighContrastDarkAqua,
+                NSAppearanceNameAqua, NSAppearanceNameDarkAqua]];
+            if ([style isEqualToString:NSAppearanceNameDarkAqua])
+                return [NSColor colorWithSRGBRed:44.0 / 255 green:44.0 / 255 blue:46.0 / 255 alpha:1];
+            if ([style isEqualToString:NSAppearanceNameAqua])
+                return [NSColor colorWithSRGBRed:0.98 green:0.98 blue:0.99 alpha:1];
+            return NSColor.windowBackgroundColor;
+        }];
+    });
+    return background;
+}
+
+@interface WindowSurface : NSView
+@end
+
+@implementation WindowSurface
+- (void)drawRect:(NSRect)dirtyRect {
+    [AppWindowBackground() setFill];
+    NSRectFill(dirtyRect);
+}
+@end
+
 static void ShowMessage(NSString *title, NSString *detail) {
     NSAlert *alert = [[NSAlert alloc] init];
     alert.messageText = title;
     alert.informativeText = detail ?: L(@"macOS не сообщила причину.");
     [alert addButtonWithTitle:@"OK"];
     [NSApp activateIgnoringOtherApps:YES];
+    alert.window.backgroundColor = AppWindowBackground();
     [alert runModal];
 }
 
@@ -714,7 +743,7 @@ static void CheckNotificationBody(NotificationDetails details, NSString *ipv4, N
 }
 
 static NSView *StackContent(NSArray<NSView *> *controls, CGFloat padding) {
-    NSView *view = [[NSView alloc] initWithFrame:NSZeroRect];
+    NSView *view = [[WindowSurface alloc] initWithFrame:NSZeroRect];
     NSStackView *stack = [NSStackView stackViewWithViews:controls];
     stack.orientation = NSUserInterfaceLayoutOrientationVertical;
     stack.alignment = NSLayoutAttributeLeading;
@@ -1094,10 +1123,12 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     text.textContainer.widthTracksTextView = YES;
     text.textContainerInset = NSMakeSize(10, 10);
     text.font = [NSFont systemFontOfSize:NSFont.systemFontSize];
+    text.backgroundColor = AppWindowBackground();
     text.string = notes;
     scroll.documentView = text;
     alert.accessoryView = scroll;
     [NSApp activateIgnoringOtherApps:YES];
+    alert.window.backgroundColor = AppWindowBackground();
     [alert runModal];
     [settings setObject:version forKey:LastSeenVersionKey];
 }
@@ -1245,6 +1276,7 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     self.welcomeSafeClose = [settings boolForKey:SafeCloseKey];
     self.welcomeWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 530, 350)
         styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable backing:NSBackingStoreBuffered defer:NO];
+    self.welcomeWindow.backgroundColor = AppWindowBackground();
     self.welcomeWindow.releasedWhenClosed = NO;
     self.welcomeWindow.delegate = self;
     self.welcomeWindow.title = GuardName;
@@ -1393,6 +1425,7 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     if (!self.settingsWindow) {
         self.settingsWindow = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 530, 575)
             styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable backing:NSBackingStoreBuffered defer:NO];
+        self.settingsWindow.backgroundColor = AppWindowBackground();
         self.settingsWindow.releasedWhenClosed = NO;
         [self.settingsWindow center];
     }
@@ -1618,6 +1651,7 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
         alert.informativeText = [NSString stringWithFormat:L(@"Установлена версия %@."), CurrentAppVersion()];
     }
     [alert addButtonWithTitle:@"OK"];
+    alert.window.backgroundColor = AppWindowBackground();
     [alert beginSheetModalForWindow:self.settingsWindow completionHandler:nil];
 }
 
@@ -1714,6 +1748,7 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
                       NSWindowStyleMaskResizable
             backing:NSBackingStoreBuffered defer:NO];
         self.addPanel.contentMinSize = NSMakeSize(365, 280);
+        self.addPanel.backgroundColor = AppWindowBackground();
         self.addPanel.title = L(@"Добавить приложения");
         self.addPanel.floatingPanel = YES;
         self.addPanel.hidesOnDeactivate = NO;
@@ -1725,7 +1760,7 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
         self.dropBox.boxType = NSBoxCustom;
         self.dropBox.cornerRadius = 12;
         self.dropBox.borderColor = NSColor.separatorColor;
-        self.dropBox.fillColor = NSColor.controlBackgroundColor;
+        self.dropBox.fillColor = AppWindowBackground();
         self.dropBox.translatesAutoresizingMaskIntoConstraints = NO;
 
         NSTextField *heading = [NSTextField labelWithString:L(@"Перетащите приложения сюда")];
@@ -1991,6 +2026,7 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
         [alert addButtonWithTitle:L(@"Отмена")];
         [alert addButtonWithTitle:L(@"Включить")];
         [NSApp activateIgnoringOtherApps:YES];
+        alert.window.backgroundColor = AppWindowBackground();
         if ([alert runModal] != NSAlertSecondButtonReturn) {
             [self refreshSettings];
             return;
@@ -2227,25 +2263,32 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     }
 
     self.pendingTarget = identifier;
-    self.prompt = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 510, 315)
+    const CGFloat textWidth = 412;
+    const CGFloat iconSize = 108;
+    self.prompt = [[NSWindow alloc] initWithContentRect:NSMakeRect(0, 0, 592, 324)
         styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable backing:NSBackingStoreBuffered defer:NO];
+    self.prompt.backgroundColor = AppWindowBackground();
     self.prompt.releasedWhenClosed = NO;
     self.prompt.title = GuardName;
     self.prompt.delegate = self;
 
+    NSString *appName = AppName(url);
     NSTextField *heading = [NSTextField wrappingLabelWithString:
-        [NSString stringWithFormat:L(@"Открыть «%@»?"), AppName(url)]];
-    heading.font = [NSFont boldSystemFontOfSize:19];
+        [NSString stringWithFormat:L(@"Открыть «%@»?"), appName]];
+    heading.font = [NSFont systemFontOfSize:21 weight:NSFontWeightBold];
+    heading.maximumNumberOfLines = 2;
+    ((NSTextFieldCell *)heading.cell).truncatesLastVisibleLine = YES;
+    heading.toolTip = heading.stringValue;
     self.promptHelp = [NSTextField wrappingLabelWithString:
         L(@"Сверьте внешние адреса с адресами VPN перед запуском.")];
-    self.promptHelp.preferredMaxLayoutWidth = 462;
-    self.ipv4 = [NSTextField labelWithString:@""];
-    self.ipv6 = [NSTextField labelWithString:@""];
+    self.promptHelp.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
     self.country = [NSTextField wrappingLabelWithString:@""];
-    self.country.preferredMaxLayoutWidth = 462;
+    self.country.font = [NSFont systemFontOfSize:14 weight:NSFontWeightSemibold];
     self.country.selectable = YES;
+    self.ipv4 = [NSTextField wrappingLabelWithString:@""];
+    self.ipv6 = [NSTextField wrappingLabelWithString:@""];
     for (NSTextField *label in @[self.ipv4, self.ipv6]) {
-        label.font = [NSFont monospacedSystemFontOfSize:13 weight:NSFontWeightRegular];
+        label.font = [NSFont monospacedSystemFontOfSize:13 weight:NSFontWeightSemibold];
         label.selectable = YES;
     }
 
@@ -2256,21 +2299,37 @@ static void NetworkChanged(SCDynamicStoreRef store, CFArrayRef keys, void *info)
     NSStackView *buttons = [NSStackView stackViewWithViews:@[self.refreshButton, cancel, self.openButton]];
     buttons.spacing = 9;
 
-    NSStackView *stack = [NSStackView stackViewWithViews:
-        @[heading, self.promptHelp, self.ipv4, self.ipv6, self.country, buttons]];
+    NSArray<NSView *> *details = @[heading, self.promptHelp, self.country, self.ipv4, self.ipv6];
+    NSStackView *stack = [NSStackView stackViewWithViews:[details arrayByAddingObject:buttons]];
     stack.orientation = NSUserInterfaceLayoutOrientationVertical;
     stack.alignment = NSLayoutAttributeLeading;
     stack.spacing = 12;
-    [stack setCustomSpacing:20 afterView:self.country];
+    [stack setCustomSpacing:16 afterView:self.country];
+    [stack setCustomSpacing:16 afterView:self.ipv6];
     stack.translatesAutoresizingMaskIntoConstraints = NO;
+    for (NSTextField *label in details) {
+        label.preferredMaxLayoutWidth = textWidth;
+        [label.widthAnchor constraintEqualToConstant:textWidth].active = YES;
+    }
+
+    NSImageView *icon = [[NSImageView alloc] initWithFrame:NSZeroRect];
+    icon.image = [NSWorkspace.sharedWorkspace iconForFile:url.path];
+    icon.imageScaling = NSImageScaleProportionallyUpOrDown;
+    [icon setAccessibilityLabel:appName];
+    icon.translatesAutoresizingMaskIntoConstraints = NO;
     NSView *view = self.prompt.contentView;
     [view addSubview:stack];
+    [view addSubview:icon];
     [NSLayoutConstraint activateConstraints:@[
         [stack.leadingAnchor constraintEqualToAnchor:view.leadingAnchor constant:24],
-        [stack.trailingAnchor constraintEqualToAnchor:view.trailingAnchor constant:-24],
-        [stack.topAnchor constraintEqualToAnchor:view.topAnchor constant:22],
-        [stack.bottomAnchor constraintLessThanOrEqualToAnchor:view.bottomAnchor constant:-22],
-        [heading.widthAnchor constraintLessThanOrEqualToAnchor:stack.widthAnchor]
+        [stack.centerYAnchor constraintEqualToAnchor:view.centerYAnchor],
+        [stack.topAnchor constraintGreaterThanOrEqualToAnchor:view.topAnchor constant:20],
+        [stack.bottomAnchor constraintLessThanOrEqualToAnchor:view.bottomAnchor constant:-20],
+        [icon.centerYAnchor constraintEqualToAnchor:view.centerYAnchor],
+        [icon.trailingAnchor constraintEqualToAnchor:view.trailingAnchor constant:-24],
+        [icon.leadingAnchor constraintGreaterThanOrEqualToAnchor:stack.trailingAnchor constant:20],
+        [icon.widthAnchor constraintEqualToConstant:iconSize],
+        [icon.heightAnchor constraintEqualToConstant:iconSize]
     ]];
 
     [self refreshIPs];
