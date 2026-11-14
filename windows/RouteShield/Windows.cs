@@ -78,6 +78,8 @@ internal sealed class WelcomeWindow : ShieldWindow
     private void Render()
     {
         SuspendLayout();
+        AcceptButton = null;
+        ActiveControl = null;
         foreach (Control child in Controls.Cast<Control>().ToArray()) child.Dispose();
         Text = T("Welcome to Route Shield", "Добро пожаловать в Route Shield");
         var body = Column();
@@ -140,10 +142,10 @@ internal sealed class WelcomeWindow : ShieldWindow
         {
             if (step == 3) { DialogResult = DialogResult.OK; return; }
             step++;
-            BeginInvoke(Render);
+            Render();
         });
         footer.Controls.Add(next);
-        if (step > 1) footer.Controls.Add(Button(T("Back", "Назад"), (_, _) => { step--; BeginInvoke(Render); }));
+        if (step > 1) footer.Controls.Add(Button(T("Back", "Назад"), (_, _) => { step--; Render(); }));
         Controls.Add(body);
         Controls.Add(footer);
         AcceptButton = next;

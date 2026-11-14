@@ -40,35 +40,56 @@ internal static class Program
 
     private static void CheckWindows()
     {
-        ApplicationConfiguration.Initialize();
+        Application.EnableVisualStyles();
+        Application.SetCompatibleTextRenderingDefault(false);
         using var icon = (Icon)SystemIcons.Application.Clone();
         Preferences preferences = new() { Language = "en" };
         using var window = new WelcomeWindow(preferences, icon);
         Exception? failure = null;
-        window.Shown += async (_, _) =>
+        using var timer = new System.Windows.Forms.Timer { Interval = 100 };
+        int action = 0;
+        window.Shown += (_, _) => timer.Start();
+        timer.Tick += (_, _) =>
         {
             try
             {
-                Find<ComboBox>(window).SelectedIndex = 1;
-                await Task.Yield();
-                Require(window.Text == "Добро пожаловать в Route Shield", "Switching language refreshes the wizard");
-                ((Button)window.AcceptButton!).PerformClick();
-                await Task.Yield();
-                var notify = Find<CheckBox>(window);
-                notify.Checked = true;
-                Find<ComboBox>(window).SelectedIndex = (int)NotificationDetails.Both;
-                ((Button)window.AcceptButton!).PerformClick();
-                await Task.Yield();
-                Find<CheckBox>(window).Checked = true;
-                ((Button)window.AcceptButton!).PerformClick();
+                switch (action++)
+                {
+                    case 0:
+                        Find<ComboBox>(window).SelectedIndex = 1;
+                        break;
+                    case 1:
+                        Require(window.Text == "Добро пожаловать в Route Shield", "Switching language refreshes the wizard");
+                        ClickNext(window);
+                        break;
+                    case 2:
+                        Find<CheckBox>(window).Checked = true;
+                        Find<ComboBox>(window).SelectedIndex = (int)NotificationDetails.Both;
+                        ClickNext(window);
+                        break;
+                    case 3:
+                        Find<CheckBox>(window).Checked = true;
+                        ClickNext(window);
+                        break;
+                    default:
+                        throw new InvalidOperationException("The welcome window did not close after Done.");
+                }
             }
             catch (Exception error) { failure = error; window.Close(); }
         };
         var result = window.ShowDialog();
-        if (failure is not null) throw failure;
+        timer.Stop();
+        if (failure is not null) throw new InvalidOperationException($"Welcome action {action} failed.", failure);
         Require(result == DialogResult.OK && window.Choice.Item1 == "ru" && window.Choice.Item2 && window.Choice.Item3 == NotificationDetails.Both &&
                 window.Choice.Item4, "All welcome steps retain the notification and force-quit choices");
         Require(!preferences.WelcomeCompleted && !preferences.ForceClose, "The welcome window stages changes");
+    }
+
+    private static void ClickNext(WelcomeWindow window)
+    {
+        var next = (Button)window.AcceptButton!;
+        Require(next.CanSelect, "The next button accepts input");
+        next.PerformClick();
     }
 
     private static T Find<T>(Control control) where T : Control =>
