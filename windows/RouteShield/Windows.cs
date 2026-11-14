@@ -1,3 +1,5 @@
+using System.Drawing.Drawing2D;
+
 namespace RouteShield;
 
 internal abstract class ShieldWindow : Form
@@ -324,33 +326,56 @@ internal sealed class AppsWindow : ShieldWindow
         foreach (Control child in grid.Controls.Cast<Control>().ToArray()) child.Dispose();
         foreach (var app in settings.Apps)
         {
-            var tile = new Panel { Width = 105, Height = 105, Margin = new Padding(5) };
+            var tile = new Panel { Width = 108, Height = 125, Margin = new Padding(5) };
+            var frame = new Panel { Location = new Point(11, 2), Size = new Size(86, 86) };
+            frame.Paint += (_, args) =>
+            {
+                args.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
+                int radius = Math.Max(1, frame.ClientSize.Width * 9 / 86);
+                using var outline = new GraphicsPath();
+                outline.AddRoundedRectangle(new Rectangle(1, 1, frame.ClientSize.Width - 3, frame.ClientSize.Height - 3),
+                    new Size(radius * 2, radius * 2));
+                using var border = new Pen(SystemInformation.HighContrast ? SystemColors.WindowText : Color.FromArgb(214, 220, 227));
+                args.Graphics.DrawPath(border, outline);
+            };
             using var appIcon = WindowsApps.IconFor(app);
             var image = new PictureBox
             {
-                Location = new Point(25, 9), Size = new Size(54, 54), Image = appIcon.ToBitmap(),
+                Location = new Point(18, 22), Size = new Size(50, 50), Image = appIcon.ToBitmap(),
                 SizeMode = PictureBoxSizeMode.Zoom
             };
             image.Disposed += (_, _) => image.Image?.Dispose();
             var name = new Label
             {
-                Text = app.Name, Location = new Point(0, 68), Size = new Size(105, 36),
+                Text = app.Name, Location = new Point(0, 94), Size = new Size(108, 30),
                 TextAlign = ContentAlignment.TopCenter, AutoEllipsis = true
             };
             var remove = new Button
             {
                 Text = "×", ForeColor = Color.White, BackColor = Color.FromArgb(177, 32, 50), FlatStyle = FlatStyle.Flat,
-                Size = new Size(27, 27), Location = new Point(76, 2), TabStop = true,
+                Size = new Size(23, 23), Location = new Point(56, 7), TabStop = true,
                 AccessibleName = T($"Remove {app.Name}", $"Удалить {app.Name}")
             };
             remove.FlatAppearance.BorderSize = 0;
+            void ShapeRemoveButton()
+            {
+                using var shape = new GraphicsPath();
+                int diameter = Math.Max(2, remove.ClientSize.Width * 10 / 23);
+                shape.AddRoundedRectangle(remove.ClientRectangle, new Size(diameter, diameter));
+                var previous = remove.Region;
+                remove.Region = new Region(shape);
+                previous?.Dispose();
+            }
+            remove.SizeChanged += (_, _) => ShapeRemoveButton();
+            ShapeRemoveButton();
             remove.Click += (_, _) =>
             {
                 if (save(settings.Apps.Where(entry => entry.Id != app.Id).ToList())) Render();
             };
-            tile.Controls.AddRange([image, name, remove]);
+            frame.Controls.AddRange([image, remove]);
             remove.BringToFront();
-            foreach (var control in new Control[] { tile, image, name, remove }) WireDrop(control);
+            tile.Controls.AddRange([frame, name]);
+            foreach (var control in new Control[] { tile, frame, image, name, remove }) WireDrop(control);
             grid.Controls.Add(tile);
         }
         grid.ResumeLayout();
